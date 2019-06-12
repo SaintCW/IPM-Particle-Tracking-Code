@@ -177,7 +177,7 @@ class Particle:
           if final_track==False: #if final_track is true, then the particle is doing it's final movement over a precise timestep, so this check is not needed.
                #if the particle moves outside of the simulation region then remove it from the particles object list it
                if check_tracking_boundaries(x=self.x,y=self.y,z=self.z)==False:
-                    self.perform_final_movement(field_row_number,plot=plot, method='numpy')
+                    self.perform_final_movement(field_row_number,plot=plot)
                #otherwise, increase the particle lifetime by 1 timestep
                else:
                     self.lifetime=self.lifetime+timestep             
@@ -189,82 +189,51 @@ class Particle:
                if plot==True:plt.plot([self.previous_x,self.x],[self.previous_y,self.y], color=self.plot_colour)
                self.destroy()
                
-     def perform_final_movement(self,field_row_number,plot,method='manual'): #use the particle's velocity, and the previous and new positions to precisely calculate the time taken to reach the tracking region boundary.
+     def perform_final_movement(self,field_row_number,plot): #use the particle's velocity, and the previous and new positions to precisely calculate the time taken to reach the tracking region boundary.
           #identify which plane the particle went outside the tracking region on. Then calculate the time taken by solving the quadratic formula twice (once with a plus sign and once with a - sign). When solving the formula, replace the new position with the position of the tracking region boundary, so that the time taken to reach it is calculated accurately 
-          if method=='manual':
-               if self.x > tracking_xmax:
-                    Ex=efield['Ex'][field_row_number]
-                    final_timestep1=((-self.previous_vx)+math.sqrt((self.previous_vx**2)-((2*self.previous_x*self.charge*Ex)/(self.mass))+((2*self.charge*tracking_xmax*Ex)/(self.mass))))/((self.charge*Ex)/self.mass)
-                    final_timestep2=((-self.previous_vx)-math.sqrt((self.previous_vx**2)-((2*self.previous_x*self.charge*Ex)/(self.mass))+((2*self.charge*tracking_xmax*Ex)/(self.mass))))/((self.charge*Ex)/self.mass)
-               elif self.x < tracking_xmin:
-                    Ex=efield['Ex'][field_row_number]
-                    final_timestep1=((-self.previous_vx)+math.sqrt((self.previous_vx**2)-((2*self.previous_x*self.charge*Ex)/(self.mass))+((2*self.charge*tracking_xmin*Ex)/(self.mass))))/((self.charge*Ex)/self.mass)
-                    final_timestep2=((-self.previous_vx)-math.sqrt((self.previous_vx**2)-((2*self.previous_x*self.charge*Ex)/(self.mass))+((2*self.charge*tracking_xmin*Ex)/(self.mass))))/((self.charge*Ex)/self.mass)
-               elif self.y > tracking_ymax:
-                    Ey=efield['Ey'][field_row_number]
-                    final_timestep1=((-self.previous_vy)+math.sqrt((self.previous_vy**2)-((2*self.previous_y*self.charge*Ey)/(self.mass))+((2*self.charge*tracking_ymax*Ey)/(self.mass))))/((self.charge*Ey)/self.mass)
-                    final_timestep2=((-self.previous_vy)-math.sqrt((self.previous_vy**2)-((2*self.previous_y*self.charge*Ey)/(self.mass))+((2*self.charge*tracking_ymax*Ey)/(self.mass))))/((self.charge*Ey)/self.mass)
-               elif self.y < tracking_ymin:
-                    Ey=efield['Ey'][field_row_number]
-                    final_timestep1=((-self.previous_vy)+math.sqrt((self.previous_vy**2)-((2*self.previous_y*self.charge*Ey)/(self.mass))+((2*self.charge*tracking_ymin*Ey)/(self.mass))))/((self.charge*Ey)/self.mass)
-                    final_timestep2=((-self.previous_vy)-math.sqrt((self.previous_vy**2)-((2*self.previous_y*self.charge*Ey)/(self.mass))+((2*self.charge*tracking_ymin*Ey)/(self.mass))))/((self.charge*Ey)/self.mass)
-               elif self.z > tracking_zmax:
-                    Ez=efield['Ez'][field_row_number]
-                    final_timestep1=((-self.previous_vz)+math.sqrt((self.previous_vz**2)-((2*self.previous_z*self.charge*Ez)/(self.mass))+((2*self.charge*tracking_zmax*Ez)/(self.mass))))/((self.charge*Ez)/self.mass)
-                    final_timestep2=((-self.previous_vz)-math.sqrt((self.previous_vz**2)-((2*self.previous_z*self.charge*Ez)/(self.mass))+((2*self.charge*tracking_zmax*Ez)/(self.mass))))/((self.charge*Ez)/self.mass)
-               elif self.z < tracking_zmin:
-                    Ez=efield['Ez'][field_row_number]
-                    final_timestep1=((-self.previous_vz)+math.sqrt((self.previous_vz**2)-((2*self.previous_z*self.charge*Ez)/(self.mass))+((2*self.charge*tracking_zmin*Ez)/(self.mass))))/((self.charge*Ez)/self.mass)
-                    final_timestep2=((-self.previous_vz)-math.sqrt((self.previous_vz**2)-((2*self.previous_z*self.charge*Ez)/(self.mass))+((2*self.charge*tracking_zmin*Ez)/(self.mass))))/((self.charge*Ez)/self.mass)
-                    
-               #identify which solution of the quadratic formula gives a positive value for time. This is the timestep that will be used for tracking
-               if final_timestep1 > final_timestep2: final_timestep=final_timestep1
-               else: final_timestep=final_timestep2         
-               #retrack the particle over the smaller final timestep
-          elif method=='numpy':
-               if self.y > tracking_ymax:
-                    Ey=efield['Ey'][field_row_number]
-                    #calculate roots of the quadratic which calculates the final timestep (t_final = (-prev_vy +- sqrt(prev_vy**2-4(q*Ey/2*mass)(y-prev_y)))/(q*Ey/mass))
-                    a=(self.charge*Ey)/(2*self.mass)
-                    b=self.previous_vy
-                    c=self.previous_y-tracking_ymax
-                    final_timestep=np.max(np.roots([a,b,c])) #np.root returns the two roots of the quadrativ equation. np.max picks the biggest one to make sure a positive timestep is used
-               elif self.y < tracking_ymin:
-                    Ey=efield['Ey'][field_row_number]
-                    a=(self.charge*Ey)/(2*self.mass)
-                    b=self.previous_vy
-                    c=self.previous_y-tracking_ymin
-                    final_timestep=np.max(np.roots([a,b,c])) 
-               elif self.x > tracking_xmax:
-                    Ey=efield['Ex'][field_row_number]
-                    a=(self.charge*Ex)/(2*self.mass)
-                    b=self.previous_vx
-                    c=self.previous_x-tracking_xmax
-                    final_timestep=np.max(np.roots([a,b,c]))                
-               elif self.x < tracking_xmin:
-                    Ey=efield['Ex'][field_row_number]
-                    a=(self.charge*Ex)/(2*self.mass)
-                    b=self.previous_vx
-                    c=self.previous_x-tracking_xmin
-                    final_timestep=np.max(np.roots([a,b,c]))                
-               elif self.z > tracking_zmax:
-                    Ey=efield['Ez'][field_row_number]
-                    a=(self.charge*Ez)/(2*self.mass)
-                    b=self.previous_vz
-                    c=self.previous_z-tracking_zmax
-                    final_timestep=np.max(np.roots([a,b,c]))                
-               elif self.z < tracking_zmin:
-                    Ey=efield['Ez'][field_row_number]
-                    a=(self.charge*Ez)/(2*self.mass)
-                    b=self.previous_vz
-                    c=self.previous_z-tracking_zmin
-                    final_timestep=np.max(np.roots([a,b,c]))                     
-               else:
-                    print("******************ERROR*********************")
-                    print("* Final movement method called incorrectly *")
-                    print("*   (No boundaries exceeded by particle)   *")
-                    print("********************************************")
-                    sys.exit()
+          if self.y > tracking_ymax:
+               Ey=efield['Ey'][field_row_number]
+               #calculate roots of the quadratic which calculates the final timestep (t_final = (-prev_vy +- sqrt(prev_vy**2-4(q*Ey/2*mass)(y-prev_y)))/(q*Ey/mass))
+               a=(self.charge*Ey)/(2*self.mass)
+               b=self.previous_vy
+               c=self.previous_y-tracking_ymax
+               final_timestep=np.max(np.roots([a,b,c])) #np.root returns the two roots of the quadrativ equation. np.max picks the biggest one to make sure a positive timestep is used
+          elif self.y < tracking_ymin:
+               Ey=efield['Ey'][field_row_number]
+               a=(self.charge*Ey)/(2*self.mass)
+               b=self.previous_vy
+               c=self.previous_y-tracking_ymin
+               final_timestep=np.max(np.roots([a,b,c])) 
+          elif self.x > tracking_xmax:
+               Ey=efield['Ex'][field_row_number]
+               a=(self.charge*Ex)/(2*self.mass)
+               b=self.previous_vx
+               c=self.previous_x-tracking_xmax
+               final_timestep=np.max(np.roots([a,b,c]))                
+          elif self.x < tracking_xmin:
+               Ey=efield['Ex'][field_row_number]
+               a=(self.charge*Ex)/(2*self.mass)
+               b=self.previous_vx
+               c=self.previous_x-tracking_xmin
+               final_timestep=np.max(np.roots([a,b,c]))                
+          elif self.z > tracking_zmax:
+               Ey=efield['Ez'][field_row_number]
+               a=(self.charge*Ez)/(2*self.mass)
+               b=self.previous_vz
+               c=self.previous_z-tracking_zmax
+               final_timestep=np.max(np.roots([a,b,c]))                
+          elif self.z < tracking_zmin:
+               Ey=efield['Ez'][field_row_number]
+               a=(self.charge*Ez)/(2*self.mass)
+               b=self.previous_vz
+               c=self.previous_z-tracking_zmin
+               final_timestep=np.max(np.roots([a,b,c]))                     
+          else:
+               print("******************ERROR*********************")
+               print("* Final movement method called incorrectly *")
+               print("*   (No boundaries exceeded by particle)   *")
+               print("********************************************")
+               sys.exit()
           final_timesteps.append(final_timestep)
           self.move(timestep=final_timestep,final_track=True, plot=plot)
 
