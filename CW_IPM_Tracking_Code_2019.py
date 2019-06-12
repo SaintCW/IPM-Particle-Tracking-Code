@@ -197,44 +197,62 @@ class Particle:
                a=(self.charge*Ey)/(2*self.mass)
                b=self.previous_vy
                c=self.previous_y-tracking_ymax
-               final_timestep=np.max(np.roots([a,b,c])) #np.root returns the two roots of the quadrativ equation. np.max picks the biggest one to make sure a positive timestep is used
+               final_timestep1=np.max(np.roots([a,b,c]))
+               final_timestep2=np.min(np.roots([a,b,c]))#np.root returns the two roots of the quadratic equation which is being solved to calculate the timestep required to reach the simulation boundary
           elif self.y < tracking_ymin:
                Ey=efield['Ey'][field_row_number]
                a=(self.charge*Ey)/(2*self.mass)
                b=self.previous_vy
                c=self.previous_y-tracking_ymin
-               final_timestep=np.max(np.roots([a,b,c])) 
+               final_timestep1,final_timestep2=np.roots([a,b,c])
+               print("Final timestep roots are: "+str(np.min(np.roots([a,b,c]))*1e9)+"ns, or "+str(final_timestep*1e9)+"ns.")
           elif self.x > tracking_xmax:
-               Ey=efield['Ex'][field_row_number]
+               Ex=efield['Ex'][field_row_number]
                a=(self.charge*Ex)/(2*self.mass)
                b=self.previous_vx
                c=self.previous_x-tracking_xmax
-               final_timestep=np.max(np.roots([a,b,c]))                
+               final_timestep1,final_timestep2=np.roots([a,b,c])
           elif self.x < tracking_xmin:
-               Ey=efield['Ex'][field_row_number]
+               Ex=efield['Ex'][field_row_number]
                a=(self.charge*Ex)/(2*self.mass)
                b=self.previous_vx
                c=self.previous_x-tracking_xmin
-               final_timestep=np.max(np.roots([a,b,c]))                
+               final_timestep1,final_timestep2=np.roots([a,b,c])
           elif self.z > tracking_zmax:
-               Ey=efield['Ez'][field_row_number]
+               Ez=efield['Ez'][field_row_number]
                a=(self.charge*Ez)/(2*self.mass)
                b=self.previous_vz
                c=self.previous_z-tracking_zmax
-               final_timestep=np.max(np.roots([a,b,c]))                
+               final_timestep1,final_timestep2=np.roots([a,b,c])
           elif self.z < tracking_zmin:
-               Ey=efield['Ez'][field_row_number]
+               Ez=efield['Ez'][field_row_number]
                a=(self.charge*Ez)/(2*self.mass)
                b=self.previous_vz
                c=self.previous_z-tracking_zmin
-               final_timestep=np.max(np.roots([a,b,c]))                     
+               final_timestep1,final_timestep2=np.roots([a,b,c])
           else:
                print("******************ERROR*********************")
                print("* Final movement method called incorrectly *")
                print("*   (No boundaries exceeded by particle)   *")
                print("********************************************")
                sys.exit()
+          
+          #Select the correct solution from the quadratic: 
+          #If both solutions are positive, use the smaller one (the other will be larger than a normal timestep would have been). Additionally, if the equation only had one root, this will be selected here as well
+          if final_timestep1 >= 0 and final_timestep2 >= 0: final_timestep=np.min([final_timestep1,final_timestep2]) 
+          #if one solution is negative, use the positive one (checked with an exclusive or condition below).
+          elif (final_timestep1 < 0 and final_timestep2 >= 0) or (final_timestep1 >= 0 and final_timestep2 < 0): final_timestep=np.max([final_timestep1,final_timestep2])
+          #if both solutions are negative, return an error
+          elif final_timestep1 < 0 and final_timestep2 < 0:
+               print("********************ERROR**********************")
+               print("*  Final movement timestep calculation error  *")
+               print("*     (Both roots return negative times)      *")
+               print("***********************************************")
+               sys.exit()
+          
+          
           final_timesteps.append(final_timestep)
+          #if final_timestep > 1e-9: print("Timestep too large...previous_y = "+str(self.previous_y)+", y = "+str(self.y)+", previous_vy = "+str(self.previous_vy)+", vy = "+str(self.y)+", Ey = "+str(Ey))
           self.move(timestep=final_timestep,final_track=True, plot=plot)
 
      def destroy(self):
@@ -309,7 +327,7 @@ print(efield.head())
 #generate an ion distribution
 particles=[] #an array to store all the particle objects in during tracking
 destroyed_particles=[] #an array to store particle objects that are removed from the simulation, usually because they have moved outside of the simulation region
-final_timesteps=[]
+final_timesteps=[] #an array to view all the final timesteps calculated for particles - for use in debugging
 particle_num=1000 #the number of particles that should be generated inside the monitor
 tracking_steps=10
 
@@ -379,9 +397,8 @@ plt.title('Particle Trajectories (2D)')
 plt.xlabel('X (mm)')
 plt.ylabel('Y (mm)')
 
-
+plt.tight_layout()
 plt.show()
     
-
 print('***************************  END  ************************************')
 #######################################################################################################################################################################
