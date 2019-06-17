@@ -59,7 +59,7 @@ def reformat_axes(field_data,model_axes):
      print('-----------------------------------------------------------------')
      return(field_data)
      
-def import_CST_EField(filepath=None,nrows=None,model_horizontal_axis='x',model_vertical_axis='y',model_longitudinal_axis='z'):
+def import_CST_EField(filepath=None,nrows=None,model_horizontal_axis='x',model_vertical_axis='y',model_longitudinal_axis='z', save_memory='True'):
      
      if filepath==None: filepath=open_file_dialogue() #if a filepath has not been specified, let the user choose a filepath graphically
      #Check format of input, and quit if format is incorrect
@@ -91,6 +91,9 @@ def import_CST_EField(filepath=None,nrows=None,model_horizontal_axis='x',model_v
      field_data=reformat_axes(field_data,model_axes)
      print("Please note that for tracking to work accurately, the detectors should normal to the y axis of the CST model")
      field_data.columns=['x','y','z','Ex','Ey','Ez']
+     
+     #reduce the memory size of the stored file by downcasting all data to floats with fewer bytes where possible
+     if save_memory: field_data=field_data.apply(pd.to_numeric,downcast='float')
      return(field_data)
  
 def convert_EField_units(field_data):
@@ -342,20 +345,19 @@ for i in range (0,particle_num):
 print("There are "+str(len(particles))+" particles generated in the initial distribution.")
 
 print("Tracking "+str(particle_num)+" particles through "+str(tracking_steps)+" timesteps.\nPlease wait...")
+print("0 ns tracked.",end=""  ) #end="" stops the output moving to a new line after printing this message (used to create a tidy progress readout in the output console)
 for i in range (0,tracking_steps): 
     for particle in particles:
-          particle.move(plot=False)
-         
-print("There are "+str(len(particles))+" particles remaining in the simulation region.")
+         particle.move(plot=False)
+    print("\r"+str(i)+" ns tracked.", end="")#re-write to the console with an updated progress message. "\r" prints from the start of the current line on the console, to overwrite the previous time printout
+print("\nThere are "+str(len(particles))+" particles remaining in the simulation region.")
 
 
 #ANALYSE RESULTS####################################################################################################################
 #generate an array of particle initial positions for plotting
+#Only use particles that have completed tracking and therefore been moved to destroyed particles
 #initial_positions[:,0] gives all the initial x positions. referencing with [:,1] or [:,2] would give y and z positions respectively
 initial_positions=np.array([0,0,0]) #initialise the array with a dummy set of 0's to make sure it has the right shape for stacking
-#for particle in particles: 
-#     particle_positions=np.array([particle.initial_x,particle.initial_y,particle.initial_z])
-#     initial_positions=np.vstack((initial_positions,particle_positions))
 for particle in destroyed_particles: 
      particle_positions=np.array([particle.initial_x,particle.initial_y,particle.initial_z])
      initial_positions=np.vstack((initial_positions,particle_positions))
@@ -363,9 +365,6 @@ initial_positions=np.delete(initial_positions,0,0) #remove the dummy row from th
 
 #generate an array of particle final positions for plotting
 final_positions=np.array([0,0,0]) #initialise the array with a dummy set of 0's to make sure it has the right shape for stacking
-#for particle in particles: 
-#     particle_positions=np.array([particle.x,particle.y,particle.z])
-#     final_positions=np.vstack((final_positions,particle_positions))
 for particle in destroyed_particles: 
      particle_positions=np.array([particle.final_x,particle.final_y,particle.final_z])
      final_positions=np.vstack((final_positions,particle_positions))
