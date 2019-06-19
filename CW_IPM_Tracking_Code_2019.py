@@ -98,9 +98,9 @@ def import_CST_EField(filepath=None,nrows=None,model_horizontal_axis='x',model_v
  
 def convert_EField_units(field_data):
      #converts efield data output in V/m from CST into V/mm to match the position data
-     field_data['Ex']=field_data['Ex']*1000
-     field_data['Ey']=field_data['Ey']*1000
-     field_data['Ez']=field_data['Ez']*1000     
+     field_data['Ex']=field_data['Ex']/1000
+     field_data['Ey']=field_data['Ey']/1000
+     field_data['Ez']=field_data['Ez']/1000     
      print("EField data converted from V/m to V/mm")
      return()
 def analyse_field_map(field_data,printout=False):
@@ -136,15 +136,12 @@ class Particle:
           self.vx=vx
           self.vy=vy
           self.vz=vz
-          print("Creating "+str(species))
           if species=='proton':
                self.mass=1.6726219e-27
                self.charge=1.60217662e-19
-               print("Setting positive charge")
           elif species=='electron':
                self.mass=9.10928e-31
                self.charge=-1.60217662e-19
-               print("Setting negative charge")
           else:
                print('\n*********************ERROR****************************')
                print("* Particle species incorrectly defined during creation *")
@@ -166,21 +163,23 @@ class Particle:
                self.previous_vy=self.vy
                self.previous_vz=self.vz
           field_row_number=lookup_field_value(self.previous_x,self.previous_y,self.previous_z,efield)
-          #velocity_magnitude=(np.sqrt((self.previous_vx/1000)**2+(self.previous_vy/1000)**2+(self.previous_vz/1000)**2)) #calculate the magnitude of the 3D previous velocity vector. Each quantity is divided by 1000 to convert from mm/s to m/s, to make calculating beta simpler
-          #relativistic_beta=velocity_magnitude/3e8
-          #relativistic_gamma=1/(np.sqrt(1-relativistic_beta**2))
-          #relativistic_mass=self.mass*relativistic_gamma
+          
+          #calculate relativistic gamma and use this to increase the particle mass to account for relativistic effects
+          velocity_magnitude=(np.sqrt((self.previous_vx/1000)**2+(self.previous_vy/1000)**2+(self.previous_vz/1000)**2)) #calculate the magnitude of the 3D previous velocity vector. Each quantity is divided by 1000 to convert from mm/s to m/s, to make calculating beta simpler
+          relativistic_beta=velocity_magnitude/3e8
+          relativistic_gamma=1/(np.sqrt(1-relativistic_beta**2))
+          relativistic_mass=self.mass*relativistic_gamma
           
           #Move the particle through one timestep calculating new positions and velocities using the Lorentz force applied by the EField at the particle's location
           #calculate new positions after one timestep
-          self.x=self.previous_x+(self.previous_vx*timestep)+((self.charge*timestep*timestep*efield['Ex'][field_row_number])/(2*self.mass))
-          self.y=self.previous_y+(self.previous_vy*timestep)+((self.charge*timestep*timestep*efield['Ey'][field_row_number])/(2*self.mass))
-          self.z=self.previous_z+(self.previous_vz*timestep)+((self.charge*timestep*timestep*efield['Ez'][field_row_number])/(2*self.mass))
+          self.x=self.previous_x+(self.previous_vx*timestep)+((self.charge*timestep*timestep*efield['Ex'][field_row_number])/(2*relativistic_mass))
+          self.y=self.previous_y+(self.previous_vy*timestep)+((self.charge*timestep*timestep*efield['Ey'][field_row_number])/(2*relativistic_mass))
+          self.z=self.previous_z+(self.previous_vz*timestep)+((self.charge*timestep*timestep*efield['Ez'][field_row_number])/(2*relativistic_mass))
           
           #calculate new velocities after timestep
-          self.vx=self.previous_vx+((self.charge*timestep*efield['Ex'][field_row_number])/(self.mass))
-          self.vy=self.previous_vy+((self.charge*timestep*efield['Ey'][field_row_number])/(self.mass))
-          self.vz=self.previous_vz+((self.charge*timestep*efield['Ez'][field_row_number])/(self.mass))
+          self.vx=self.previous_vx+((self.charge*timestep*efield['Ex'][field_row_number])/(relativistic_mass))
+          self.vy=self.previous_vy+((self.charge*timestep*efield['Ey'][field_row_number])/(relativistic_mass))
+          self.vz=self.previous_vz+((self.charge*timestep*efield['Ez'][field_row_number])/(relativistic_mass))
           
           #Print position information for debugging
           #print("Ey = "+str(efield['Ey'][field_row_number])+", Previous Y = "+str(self.previous_y)+", Previous Vy = "+str(self.previous_vy)+", New Y_Position = "+str(self.y)+", New Y Velocity = "+str(self.vy)+", Timstep used = "+str(timestep))
@@ -345,7 +344,7 @@ print(efield.head())
 particles=[] #an array to store all the particle objects in during tracking
 destroyed_particles=[] #an array to store particle objects that are removed from the simulation, usually because they have moved outside of the simulation region
 final_timesteps=[] #an array to view all the final timesteps calculated for particles - for use in debugging
-particle_num=1 #the number of particles that should be generated inside the monitor
+particle_num=1000 #the number of particles that should be generated inside the monitor
 tracking_steps=10
 
 #create particles
@@ -372,6 +371,9 @@ print("\nThere are "+str(len(particles))+" particles remaining in the simulation
 #Only use particles that have completed tracking and therefore been moved to destroyed particles
 #initial_positions[:,0] gives all the initial x positions. referencing with [:,1] or [:,2] would give y and z positions respectively
 initial_positions=np.array([0,0,0]) #initialise the array with a dummy set of 0's to make sure it has the right shape for stacking
+for particle in particles:
+     particle_positions=np.array([particle.initial_x,particle.initial_y,particle.initial_z])
+     initial_positions=np.vstack((initial_positions,particle_positions))
 for particle in destroyed_particles: 
      particle_positions=np.array([particle.initial_x,particle.initial_y,particle.initial_z])
      initial_positions=np.vstack((initial_positions,particle_positions))
@@ -379,6 +381,9 @@ initial_positions=np.delete(initial_positions,0,0) #remove the dummy row from th
 
 #generate an array of particle final positions for plotting
 final_positions=np.array([0,0,0]) #initialise the array with a dummy set of 0's to make sure it has the right shape for stacking
+for particle in particles: 
+     particle_positions=np.array([particle.x,particle.y,particle.z])
+     final_positions=np.vstack((final_positions,particle_positions))
 for particle in destroyed_particles: 
      particle_positions=np.array([particle.final_x,particle.final_y,particle.final_z])
      final_positions=np.vstack((final_positions,particle_positions))
@@ -410,19 +415,23 @@ plt.title('Particle Trajectories (2D)')
 plt.xlabel('X (mm)')
 plt.ylabel('Y (mm)')
 
+if np.size(destroyed_particles) > 0:
+     plt.subplot(2,2,4)
+     plt.hist(final_positions[:,0],bins=40)
+     plt.title("Measured Beam Profile (!TEST!)")
 plt.tight_layout()
 plt.show()
 
 #test particle acceleration
 testy=Particle(x=0,y=0,z=100,species='electron',vx=0,vy=0,vz=0,lifetime=0)
 print("Particle Created: Mass = "+str(testy.mass)+", Charge = "+str(testy.charge))
-test_efield=2400
+test_efield=20e3/1000 #divide efield strength by 1000 to convert units from V/m to V/mm
 test_positions=[]
 velocities=[]
 betas=[]
 total_energies=[]
 kinetic_energies=[]
-timestep=1e-7
+timestep=1e-12
 
 for  i in range (0,20000):
      testy.previous_x=testy.x
@@ -452,17 +461,20 @@ for  i in range (0,20000):
      testy.vx=testy.previous_vx+((testy.charge*timestep*test_efield)/(mass))
      testy.vy=testy.previous_vy+((testy.charge*timestep*0)/(mass))
      testy.vz=testy.previous_vz+((testy.charge*timestep*0)/(mass))
-     test_positions.append(testy.x*1)
-     velocities.append(testy.vx-3)
+     test_positions.append(testy.x)
+     velocities.append(testy.vx)
      #print("Charge = "+str(particle.charge)+", Mass = "+str(particle.mass)+", X Velocity = "+str(particle.vx))
 plt.figure()
-plt.plot(total_energies,betas)
+plt.plot(total_energies,velocities)
 plt.plot(kinetic_energies,betas)
-plt.title("Fraction of light speed vs. Proton Energy")
+plt.title("Velocity vs. Proton Energy")
 plt.xlabel("Energies [MeV]")
 plt.ylabel("Relativistic Beta")
 plt.legend(["Total Energy","Kinetic Energy"])
 
+plt.figure()
+plt.plot(velocities)
+plt.title("Velocity (m/s) vs. Time (ps)")
 #normalise all plots
 test_positions=normalise_list(test_positions)
 total_energies=normalise_list(total_energies)
