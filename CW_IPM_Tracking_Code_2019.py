@@ -172,14 +172,14 @@ class Particle:
           
           #Move the particle through one timestep calculating new positions and velocities using the Lorentz force applied by the EField at the particle's location
           #calculate new positions after one timestep
-          self.x=self.previous_x+(self.previous_vx*timestep)+((self.charge*timestep*timestep*efield['Ex'][field_row_number])/(2*relativistic_mass))
-          self.y=self.previous_y+(self.previous_vy*timestep)+((self.charge*timestep*timestep*efield['Ey'][field_row_number])/(2*relativistic_mass))
-          self.z=self.previous_z+(self.previous_vz*timestep)+((self.charge*timestep*timestep*efield['Ez'][field_row_number])/(2*relativistic_mass))
+          self.x=self.previous_x+(self.previous_vx*timestep)+(((self.charge*timestep*timestep*efield['Ex'][field_row_number])/(2*relativistic_mass))*1e6)
+          self.y=self.previous_y+(self.previous_vy*timestep)+(((self.charge*timestep*timestep*efield['Ey'][field_row_number])/(2*relativistic_mass))*1e6)
+          self.z=self.previous_z+(self.previous_vz*timestep)+(((self.charge*timestep*timestep*efield['Ez'][field_row_number])/(2*relativistic_mass))*1e6)
           
           #calculate new velocities after timestep
-          self.vx=self.previous_vx+((self.charge*timestep*efield['Ex'][field_row_number])/(relativistic_mass))
-          self.vy=self.previous_vy+((self.charge*timestep*efield['Ey'][field_row_number])/(relativistic_mass))
-          self.vz=self.previous_vz+((self.charge*timestep*efield['Ez'][field_row_number])/(relativistic_mass))
+          self.vx=self.previous_vx+(((self.charge*timestep*efield['Ex'][field_row_number])/(relativistic_mass))*1e6)
+          self.vy=self.previous_vy+(((self.charge*timestep*efield['Ey'][field_row_number])/(relativistic_mass))*1e6)
+          self.vz=self.previous_vz+(((self.charge*timestep*efield['Ez'][field_row_number])/(relativistic_mass))*1e6)
           
           #Print position information for debugging
           #print("Ey = "+str(efield['Ey'][field_row_number])+", Previous Y = "+str(self.previous_y)+", Previous Vy = "+str(self.previous_vy)+", New Y_Position = "+str(self.y)+", New Y Velocity = "+str(self.vy)+", Timstep used = "+str(timestep))
@@ -200,43 +200,50 @@ class Particle:
                self.destroy()
                
      def perform_final_movement(self,field_row_number,plot): #use the particle's velocity, and the previous and new positions to precisely calculate the time taken to reach the tracking region boundary.
+          #calculate relativistic gamma and use this to increase the particle mass to account for relativistic effects - the relativistic-adjusted mass has not been passed to this function so it must be recalculated
+          velocity_magnitude=(np.sqrt((self.previous_vx/1000)**2+(self.previous_vy/1000)**2+(self.previous_vz/1000)**2)) #calculate the magnitude of the 3D previous velocity vector. Each quantity is divided by 1000 to convert from mm/s to m/s, to make calculating beta simpler
+          relativistic_beta=velocity_magnitude/3e8
+          relativistic_gamma=1/(np.sqrt(1-relativistic_beta**2))
+          relativistic_mass=self.mass*relativistic_gamma
+          
+          
           #identify which plane the particle went outside the tracking region on. Then calculate the time taken by solving the quadratic formula twice (once with a plus sign and once with a - sign). When solving the formula, replace the new position with the position of the tracking region boundary, so that the time taken to reach it is calculated accurately 
           if self.y > tracking_ymax:
                Ey=efield['Ey'][field_row_number]
                #calculate roots of the quadratic which calculates the final timestep (t_final = (-prev_vy +- sqrt(prev_vy**2-4(q*Ey/2*mass)(y-prev_y)))/(q*Ey/mass))
-               a=(self.charge*Ey)/(2*self.mass)
+               a=(self.charge*Ey*1e6)/(2*relativistic_mass) #multiplied by 1e6 to give units of mm/s^2
                b=self.previous_vy
                c=self.previous_y-tracking_ymax
                final_timestep1=np.max(np.roots([a,b,c]))
                final_timestep2=np.min(np.roots([a,b,c]))#np.root returns the two roots of the quadratic equation which is being solved to calculate the timestep required to reach the simulation boundary
           elif self.y < tracking_ymin:
                Ey=efield['Ey'][field_row_number]
-               a=(self.charge*Ey)/(2*self.mass)
+               a=(self.charge*Ey*1e6)/(2*relativistic_mass)
                b=self.previous_vy
                c=self.previous_y-tracking_ymin
                final_timestep1,final_timestep2=np.roots([a,b,c])
                print("Final timestep roots are: "+str(np.min(np.roots([a,b,c]))*1e9)+"ns, or "+str(final_timestep*1e9)+"ns.")
           elif self.x > tracking_xmax:
                Ex=efield['Ex'][field_row_number]
-               a=(self.charge*Ex)/(2*self.mass)
+               a=(self.charge*Ex*1e6)/(2*relativistic_mass)
                b=self.previous_vx
                c=self.previous_x-tracking_xmax
                final_timestep1,final_timestep2=np.roots([a,b,c])
           elif self.x < tracking_xmin:
                Ex=efield['Ex'][field_row_number]
-               a=(self.charge*Ex)/(2*self.mass)
+               a=(self.charge*Ex*1e6)/(2*relativistic_mass)
                b=self.previous_vx
                c=self.previous_x-tracking_xmin
                final_timestep1,final_timestep2=np.roots([a,b,c])
           elif self.z > tracking_zmax:
                Ez=efield['Ez'][field_row_number]
-               a=(self.charge*Ez)/(2*self.mass)
+               a=(self.charge*Ez*1e6)/(2*relativistic_mass)
                b=self.previous_vz
                c=self.previous_z-tracking_zmax
                final_timestep1,final_timestep2=np.roots([a,b,c])
           elif self.z < tracking_zmin:
                Ez=efield['Ez'][field_row_number]
-               a=(self.charge*Ez)/(2*self.mass)
+               a=(self.charge*Ez*1e6)/(2*relativistic_mass)
                b=self.previous_vz
                c=self.previous_z-tracking_zmin
                final_timestep1,final_timestep2=np.roots([a,b,c])
@@ -344,8 +351,8 @@ print(efield.head())
 particles=[] #an array to store all the particle objects in during tracking
 destroyed_particles=[] #an array to store particle objects that are removed from the simulation, usually because they have moved outside of the simulation region
 final_timesteps=[] #an array to view all the final timesteps calculated for particles - for use in debugging
-particle_num=1000 #the number of particles that should be generated inside the monitor
-tracking_steps=10
+particle_num=10000 #the number of particles that should be generated inside the monitor
+tracking_steps=50
 
 #create particles
 beam_xrad=54.9
@@ -389,11 +396,19 @@ for particle in destroyed_particles:
      final_positions=np.vstack((final_positions,particle_positions))
 final_positions=np.delete(final_positions,0,0) #remove the dummy row from the top of the array
 
+if np.size(destroyed_particles) > 0:
+     detected_positions=np.array([0,0,0])
+     for particle in destroyed_particles: 
+          if particle.final_y = tracking_ymax:
+               particle_positions=np.array([particle.final_x,particle.final_y,particle.final_z])
+               detected_positions=np.vstack((detected_positions,particle_positions))
+     detected_positions=np.delete(detected_positions,0,0) #remove the dummy row from the top of the array
+print("The number of particles reaching the detectors is: "+str(np.size(detected_positions[:,0])))
 #PLOT DATA##########################################################################################################################
 
 #Plot the initial particle distribution
-plt.figure()
-plt.subplot(2,2,1)
+plt.figure(figsize=(16,12))
+plt.subplot(2,3,1)
 plt.scatter(initial_positions[:,0],initial_positions[:,1],s=1)
 plt.title('Initial Particle Distribution (2D)')
 plt.xlabel('X (mm)')
@@ -401,31 +416,39 @@ plt.ylabel('Y (mm)')
 plt.axis([-150,150,-150,150]) #the first 2 elements set the lower and upper x axis limits, the next 2 elements set the y axis range
 
 #plot final positions
-plt.subplot(2,2,2)
+plt.subplot(2,3,2)
 plt.scatter(final_positions[:,0],final_positions[:,1], s=1)
 plt.title('Final Particle Distribution (2D)')
 plt.xlabel('X (mm)')
 plt.ylabel('Y (mm)')
-plt.axis([-300,300,-300,300]) #the first 2 elements set the lower and upper x axis limits, the next 2 elements set the y axis range
+plt.axis([-150,150,-150,150]) #the first 2 elements set the lower and upper x axis limits, the next 2 elements set the y axis range
 
 #Plot rough particle tracks using initial and final positions
-plt.subplot(2,2,3)
+plt.subplot(2,3,3)
 plt.plot(([initial_positions[:,0],final_positions[:,0]]),([initial_positions[:,1],final_positions[:,1]]))
 plt.title('Particle Trajectories (2D)')
 plt.xlabel('X (mm)')
 plt.ylabel('Y (mm)')
+plt.axis([-150,150,-150,150]) #the first 2 elements set the lower and upper x axis limits, the next 2 elements set the y axis range
+
+
+plt.subplot(2,3,5)
+plt.hist(initial_positions[:,0],bins=40, range=(-120,120), edgecolor='black')
+plt.title("Initial Beam Profile (!TEST!)")
 
 if np.size(destroyed_particles) > 0:
-     plt.subplot(2,2,4)
-     plt.hist(final_positions[:,0],bins=40)
-     plt.title("Measured Beam Profile (!TEST!)")
+     plt.subplot(2,3,6)
+     plt.hist(detected_positions[:,0],bins=40, range=(-120,120), edgecolor='black')
+     plt.title("Beam Profile At Channeltrons (!TEST!)")
+
 plt.tight_layout()
 plt.show()
 
+"""
 #test particle acceleration
 testy=Particle(x=0,y=0,z=100,species='electron',vx=0,vy=0,vz=0,lifetime=0)
-print("Particle Created: Mass = "+str(testy.mass)+", Charge = "+str(testy.charge))
-test_efield=20e3/1000 #divide efield strength by 1000 to convert units from V/m to V/mm
+#print("Particle Created: Mass = "+str(testy.mass)+", Charge = "+str(testy.charge))
+test_efield=-333.333 #20kV over a 60mm gap is 333.333V/mm
 test_positions=[]
 velocities=[]
 betas=[]
@@ -433,7 +456,7 @@ total_energies=[]
 kinetic_energies=[]
 timestep=1e-12
 
-for  i in range (0,20000):
+for  i in range (0,15000):
      testy.previous_x=testy.x
      testy.previous_y=testy.y
      testy.previous_z=testy.z
@@ -451,18 +474,18 @@ for  i in range (0,20000):
      betas.append(relativistic_beta)
      total_energies.append(total_energy)
      kinetic_energies.append(total_energy-((testy.mass*3e8*3e8)*6.242e12))
-     #print("Previous_Vx = "+str(testy.previous_vx)+", Beta = "+str(relativistic_beta)+", Gamma = "+str(relativistic_gamma)+", Mass = "+str(mass))
+     #print("Previous_Vx = "+str(testy.previous_vx)+"mm/s, Beta = "+str(relativistic_beta)+", Gamma = "+str(relativistic_gamma)+", Mass = "+str(mass)+"kg")
      #Move the particle through one timestep calculating new positions and velocities using the Lorentz force applied by the EField at the particle's location
      #calculate new positions after one timestep
-     testy.x=testy.previous_x+(testy.previous_vx*timestep)+((testy.charge*timestep*timestep*test_efield)/(2*mass))
-     testy.y=testy.previous_y+(testy.previous_vy*timestep)+((testy.charge*timestep*timestep*0)/(2*mass))
-     testy.z=testy.previous_z+(testy.previous_vz*timestep)+((testy.charge*timestep*timestep*0)/(2*mass))
+     testy.x=testy.previous_x+(testy.previous_vx*timestep)+(((testy.charge*timestep*timestep*test_efield)/(2*mass))*1e6) #*10e6 to convert the calculation of acceleration into mm/s^2 (using an input Efield given in V/mm)
+     testy.y=testy.previous_y+(testy.previous_vy*timestep)+(((testy.charge*timestep*timestep*0)/(2*mass))*1e6)
+     testy.z=testy.previous_z+(testy.previous_vz*timestep)+(((testy.charge*timestep*timestep*0)/(2*mass))*1e6)
      #calculate new velocities after timestep
-     testy.vx=testy.previous_vx+((testy.charge*timestep*test_efield)/(mass))
-     testy.vy=testy.previous_vy+((testy.charge*timestep*0)/(mass))
-     testy.vz=testy.previous_vz+((testy.charge*timestep*0)/(mass))
+     testy.vx=testy.previous_vx+(((testy.charge*timestep*test_efield)/(mass))*1e6)
+     testy.vy=testy.previous_vy+(((testy.charge*timestep*0)/(mass))*1e6)
+     testy.vz=testy.previous_vz+(((testy.charge*timestep*0)/(mass))*1e6)
      test_positions.append(testy.x)
-     velocities.append(testy.vx)
+     velocities.append(testy.vx/1000)#store velocities as m/s for plotting, not mm.s
      #print("Charge = "+str(particle.charge)+", Mass = "+str(particle.mass)+", X Velocity = "+str(particle.vx))
 plt.figure()
 plt.plot(total_energies,velocities)
@@ -480,15 +503,9 @@ test_positions=normalise_list(test_positions)
 total_energies=normalise_list(total_energies)
 kinetic_energies=normalise_list(kinetic_energies)
 velocities=normalise_list(velocities)
-plt.figure()
-plt.plot(test_positions)     
-plt.title("Relativistic tracking test")
-plt.xlabel("Time (seconds*10^-7)")
-plt.ylabel("Particle Properties (all normalised to 1)")
-plt.plot(total_energies)
-plt.plot(kinetic_energies)
-plt.plot(velocities)
-plt.legend(["Position (arb)","Total Energy(arb)","Kinetic Energy (arb)","Beta (arb)"])
+
 plt.show()
+"""
+
 print('***************************  END  ************************************')
 #######################################################################################################################################################################
