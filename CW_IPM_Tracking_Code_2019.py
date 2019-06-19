@@ -136,12 +136,15 @@ class Particle:
           self.vx=vx
           self.vy=vy
           self.vz=vz
+          print("Creating "+str(species))
           if species=='proton':
                self.mass=1.6726219e-27
                self.charge=1.60217662e-19
+               print("Setting positive charge")
           elif species=='electron':
                self.mass=9.10928e-31
                self.charge=-1.60217662e-19
+               print("Setting negative charge")
           else:
                print('\n*********************ERROR****************************')
                print("* Particle species incorrectly defined during creation *")
@@ -163,6 +166,11 @@ class Particle:
                self.previous_vy=self.vy
                self.previous_vz=self.vz
           field_row_number=lookup_field_value(self.previous_x,self.previous_y,self.previous_z,efield)
+          #velocity_magnitude=(np.sqrt((self.previous_vx/1000)**2+(self.previous_vy/1000)**2+(self.previous_vz/1000)**2)) #calculate the magnitude of the 3D previous velocity vector. Each quantity is divided by 1000 to convert from mm/s to m/s, to make calculating beta simpler
+          #relativistic_beta=velocity_magnitude/3e8
+          #relativistic_gamma=1/(np.sqrt(1-relativistic_beta**2))
+          #relativistic_mass=self.mass*relativistic_gamma
+          
           #Move the particle through one timestep calculating new positions and velocities using the Lorentz force applied by the EField at the particle's location
           #calculate new positions after one timestep
           self.x=self.previous_x+(self.previous_vx*timestep)+((self.charge*timestep*timestep*efield['Ex'][field_row_number])/(2*self.mass))
@@ -267,7 +275,13 @@ class Particle:
           particles.remove(self)
           #add the particles to a seperate list that stores the removed particles, in case extra analysis on these is required
           destroyed_particles.append(self)
-          
+
+def normalise_list(data):
+     '''Takes a python list as an input, converts it to a numpy array and normalises it'''
+     data=np.asarray(data)
+     data=data/data.max()
+     return(data)
+     
 def check_field_boundaries(x,y,z,field_data): 
      #REMOVED TO SPEED UP CODE - rely on values calculated when analyse field was last called in the main code -->
      #field_step_size=field_data['z'][1]-field_data['z'][0]
@@ -320,7 +334,7 @@ print('**********************************************************************')
 plt.close('all') #close anyt plots still open from previous runs of the code
 
 filepath=open_file_dialogue() #let the user choose a filepath graphically
-efield=import_CST_EField(filepath,nrows=None,model_horizontal_axis='z',model_vertical_axis='y',model_longitudinal_axis='x')
+efield=import_CST_EField(filepath,nrows=None, model_horizontal_axis='z',model_vertical_axis='y',model_longitudinal_axis='x')
 #analyse the field map to obtain properties needed for data lookup in the field
 nrows,step_size,x_size,y_size,z_size,min_x,max_x,min_y,max_y,min_z,max_z=analyse_field_map(efield,printout=True)
 
@@ -331,7 +345,7 @@ print(efield.head())
 particles=[] #an array to store all the particle objects in during tracking
 destroyed_particles=[] #an array to store particle objects that are removed from the simulation, usually because they have moved outside of the simulation region
 final_timesteps=[] #an array to view all the final timesteps calculated for particles - for use in debugging
-particle_num=1000 #the number of particles that should be generated inside the monitor
+particle_num=1 #the number of particles that should be generated inside the monitor
 tracking_steps=10
 
 #create particles
@@ -349,7 +363,7 @@ print("0 ns tracked.",end=""  ) #end="" stops the output moving to a new line af
 for i in range (0,tracking_steps): 
     for particle in particles:
          particle.move(plot=False)
-    print("\r"+str(i)+" ns tracked.", end="")#re-write to the console with an updated progress message. "\r" prints from the start of the current line on the console, to overwrite the previous time printout
+    print("\r"+str(i+1)+" ns tracked.", end="")#re-write to the console with an updated progress message. "\r" prints from the start of the current line on the console, to overwrite the previous time printout
 print("\nThere are "+str(len(particles))+" particles remaining in the simulation region.")
 
 
@@ -398,6 +412,71 @@ plt.ylabel('Y (mm)')
 
 plt.tight_layout()
 plt.show()
-    
+
+#test particle acceleration
+testy=Particle(x=0,y=0,z=100,species='electron',vx=0,vy=0,vz=0,lifetime=0)
+print("Particle Created: Mass = "+str(testy.mass)+", Charge = "+str(testy.charge))
+test_efield=2400
+test_positions=[]
+velocities=[]
+betas=[]
+total_energies=[]
+kinetic_energies=[]
+timestep=1e-7
+
+for  i in range (0,20000):
+     testy.previous_x=testy.x
+     testy.previous_y=testy.y
+     testy.previous_z=testy.z
+     testy.previous_vx=testy.vx
+     testy.previous_vy=testy.vy
+     testy.previous_vz=testy.vz
+     
+     relativistic_beta=(np.sqrt((testy.previous_vx/1000)**2+(testy.previous_vy/1000)**2+(testy.previous_vz/1000)**2))/3e8 #calculate the magnitude of the 3D previous velocity vector and divide by 3e11 (speed of light in mm/s)
+     if relativistic_beta > 1 : 
+          relativistic_beta=0.99999999
+          print("Warning, beta tried to exceed 1. \n --> Beta was reduced to 0.99999999 to stop the universe breaking")
+     relativistic_gamma=1/(np.sqrt(1-relativistic_beta**2))
+     mass=testy.mass*relativistic_gamma     
+     total_energy=(relativistic_gamma*testy.mass*3e8*3e8)*6.242e12
+     betas.append(relativistic_beta)
+     total_energies.append(total_energy)
+     kinetic_energies.append(total_energy-((testy.mass*3e8*3e8)*6.242e12))
+     #print("Previous_Vx = "+str(testy.previous_vx)+", Beta = "+str(relativistic_beta)+", Gamma = "+str(relativistic_gamma)+", Mass = "+str(mass))
+     #Move the particle through one timestep calculating new positions and velocities using the Lorentz force applied by the EField at the particle's location
+     #calculate new positions after one timestep
+     testy.x=testy.previous_x+(testy.previous_vx*timestep)+((testy.charge*timestep*timestep*test_efield)/(2*mass))
+     testy.y=testy.previous_y+(testy.previous_vy*timestep)+((testy.charge*timestep*timestep*0)/(2*mass))
+     testy.z=testy.previous_z+(testy.previous_vz*timestep)+((testy.charge*timestep*timestep*0)/(2*mass))
+     #calculate new velocities after timestep
+     testy.vx=testy.previous_vx+((testy.charge*timestep*test_efield)/(mass))
+     testy.vy=testy.previous_vy+((testy.charge*timestep*0)/(mass))
+     testy.vz=testy.previous_vz+((testy.charge*timestep*0)/(mass))
+     test_positions.append(testy.x*1)
+     velocities.append(testy.vx-3)
+     #print("Charge = "+str(particle.charge)+", Mass = "+str(particle.mass)+", X Velocity = "+str(particle.vx))
+plt.figure()
+plt.plot(total_energies,betas)
+plt.plot(kinetic_energies,betas)
+plt.title("Fraction of light speed vs. Proton Energy")
+plt.xlabel("Energies [MeV]")
+plt.ylabel("Relativistic Beta")
+plt.legend(["Total Energy","Kinetic Energy"])
+
+#normalise all plots
+test_positions=normalise_list(test_positions)
+total_energies=normalise_list(total_energies)
+kinetic_energies=normalise_list(kinetic_energies)
+velocities=normalise_list(velocities)
+plt.figure()
+plt.plot(test_positions)     
+plt.title("Relativistic tracking test")
+plt.xlabel("Time (seconds*10^-7)")
+plt.ylabel("Particle Properties (all normalised to 1)")
+plt.plot(total_energies)
+plt.plot(kinetic_energies)
+plt.plot(velocities)
+plt.legend(["Position (arb)","Total Energy(arb)","Kinetic Energy (arb)","Beta (arb)"])
+plt.show()
 print('***************************  END  ************************************')
 #######################################################################################################################################################################
