@@ -138,7 +138,7 @@ class Particle:
           self.vz=vz
           if species=='proton':
                self.mass=1.6726219e-27
-               self.charge=1.60217662e-19
+               self.charge=-1.60217662e-19
           elif species=='electron':
                self.mass=9.10928e-31
                self.charge=-1.60217662e-19
@@ -222,7 +222,7 @@ class Particle:
                b=self.previous_vy
                c=self.previous_y-tracking_ymin
                final_timestep1,final_timestep2=np.roots([a,b,c])
-               print("Final timestep roots are: "+str(np.min(np.roots([a,b,c]))*1e9)+"ns, or "+str(final_timestep*1e9)+"ns.")
+               print("Final timestep roots are: "+str(final_timestep1)+"ns, or "+str(final_timestep2)+"ns.")
           elif self.x > tracking_xmax:
                Ex=efield['Ex'][field_row_number]
                a=(self.charge*Ex*1e6)/(2*relativistic_mass)
@@ -351,8 +351,8 @@ print(efield.head())
 particles=[] #an array to store all the particle objects in during tracking
 destroyed_particles=[] #an array to store particle objects that are removed from the simulation, usually because they have moved outside of the simulation region
 final_timesteps=[] #an array to view all the final timesteps calculated for particles - for use in debugging
-particle_num=10000 #the number of particles that should be generated inside the monitor
-tracking_steps=50
+particle_num=1000 #the number of particles that should be generated inside the monitor
+tracking_steps=500
 
 #create particles
 beam_xrad=54.9
@@ -361,7 +361,7 @@ beam_xpos=0.86
 beam_ypos=-2.9
 for i in range (0,particle_num):
      #create a particle. --> Calculate the x and y positions as random numbers generated inside gaussian (normal) distributions for each axis. The distribution mean (loc) values are set to the beam offset positions, and the standard deviations (scale) are set to half of the beam width in CST (so that the 95% widths correspond to 2 signma, which is correct for a gaussian). Size is the number of points that the function generates
-     Particle(x=(np.random.normal(loc=beam_xpos,scale=0.5*beam_xrad,size=1)[0]),y=(np.random.normal(loc=beam_ypos,scale=0.5*beam_yrad,size=1)[0]),z=364,species='electron')
+     Particle(x=(np.random.normal(loc=beam_xpos,scale=0.5*beam_xrad,size=1)[0]),y=(np.random.normal(loc=beam_ypos,scale=0.5*beam_yrad,size=1)[0]),z=364,species='proton')
 print("There are "+str(len(particles))+" particles generated in the initial distribution.")
 
 print("Tracking "+str(particle_num)+" particles through "+str(tracking_steps)+" timesteps.\nPlease wait...")
@@ -399,15 +399,16 @@ final_positions=np.delete(final_positions,0,0) #remove the dummy row from the to
 if np.size(destroyed_particles) > 0:
      detected_positions=np.array([0,0,0])
      for particle in destroyed_particles: 
-          if particle.final_y = tracking_ymax:
+          if particle.final_y == tracking_ymax:
                particle_positions=np.array([particle.final_x,particle.final_y,particle.final_z])
                detected_positions=np.vstack((detected_positions,particle_positions))
      detected_positions=np.delete(detected_positions,0,0) #remove the dummy row from the top of the array
-print("The number of particles reaching the detectors is: "+str(np.size(detected_positions[:,0])))
+if np.size(detected_positions) == 0 : print ("***There were no particles that reached the detectors.\n --> Consider increasing the number or length of timesteps, or double check the position of the detector")
+else:print("The number of particles reaching the detectors is: "+str(np.size(detected_positions[:,0])))
 #PLOT DATA##########################################################################################################################
 
 #Plot the initial particle distribution
-plt.figure(figsize=(16,12))
+plt.figure(figsize=(15,10))
 plt.subplot(2,3,1)
 plt.scatter(initial_positions[:,0],initial_positions[:,1],s=1)
 plt.title('Initial Particle Distribution (2D)')
@@ -425,7 +426,7 @@ plt.axis([-150,150,-150,150]) #the first 2 elements set the lower and upper x ax
 
 #Plot rough particle tracks using initial and final positions
 plt.subplot(2,3,3)
-plt.plot(([initial_positions[:,0],final_positions[:,0]]),([initial_positions[:,1],final_positions[:,1]]))
+plt.plot(([initial_positions[:,0],final_positions[:,0]]),([initial_positions[:,1],final_positions[:,1]]), '--', linewidth=0.25)
 plt.title('Particle Trajectories (2D)')
 plt.xlabel('X (mm)')
 plt.ylabel('Y (mm)')
