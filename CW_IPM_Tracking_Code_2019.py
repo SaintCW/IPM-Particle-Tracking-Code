@@ -9,9 +9,12 @@ import sys
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import scipy as sp
+from scipy import constants
 import math
 from tkinter import filedialog
 from tkinter import *
+import time
 
 #Define global variables
 #tracking region limits (from CST model, ymax is the detector co-ordinates, the z and x limits are the inside faces of the monitor body)
@@ -22,6 +25,8 @@ tracking_ymin=-116
 tracking_zmax=462.5
 tracking_zmin=66.5
 
+#assign physical constants to variable names
+c = sp.constants.c
 
 def open_file_dialogue():
      root=Tk()
@@ -138,9 +143,18 @@ class Particle:
           self.vz=vz
           if species=='proton':
                self.mass=1.6726219e-27
-               self.charge=-1.60217662e-19
+               self.charge=1.60217662e-19
           elif species=='electron':
                self.mass=9.10928e-31
+               self.charge=-1.60217662e-19
+          elif species=='antiproton':
+               self.mass=1.6726219e-27
+               self.charge=-1.60217662e-19
+          elif species=='positron':
+               self.mass=9.10928e-31
+               self.charge=1.60217662e-19
+          elif species=='test': #create an ultra-light test particle to test tracking relativity calculations
+               self.mass=9e-32
                self.charge=-1.60217662e-19
           else:
                print('\n*********************ERROR****************************')
@@ -165,10 +179,7 @@ class Particle:
           field_row_number=lookup_field_value(self.previous_x,self.previous_y,self.previous_z,efield)
           
           #calculate relativistic gamma and use this to increase the particle mass to account for relativistic effects
-          velocity_magnitude=(np.sqrt((self.previous_vx/1000)**2+(self.previous_vy/1000)**2+(self.previous_vz/1000)**2)) #calculate the magnitude of the 3D previous velocity vector. Each quantity is divided by 1000 to convert from mm/s to m/s, to make calculating beta simpler
-          relativistic_beta=velocity_magnitude/3e8
-          relativistic_gamma=1/(np.sqrt(1-relativistic_beta**2))
-          relativistic_mass=self.mass*relativistic_gamma
+          relativistic_mass=self.mass*(calculate_gamma(self))
           
           #Move the particle through one timestep calculating new positions and velocities using the Lorentz force applied by the EField at the particle's location
           #calculate new positions after one timestep
@@ -197,15 +208,14 @@ class Particle:
           if final_track==True:
                self.lifetime=self.lifetime+timestep
                if plot==True:plt.plot([self.previous_x,self.x],[self.previous_y,self.y], color=self.plot_colour)
+               #print("PARTICLE DESTROYED - Lifetime = "+str(self.lifetime)+" s")
+               #destroy the particle
                self.destroy()
                
      def perform_final_movement(self,field_row_number,plot): #use the particle's velocity, and the previous and new positions to precisely calculate the time taken to reach the tracking region boundary.
-          #calculate relativistic gamma and use this to increase the particle mass to account for relativistic effects - the relativistic-adjusted mass has not been passed to this function so it must be recalculated
-          velocity_magnitude=(np.sqrt((self.previous_vx/1000)**2+(self.previous_vy/1000)**2+(self.previous_vz/1000)**2)) #calculate the magnitude of the 3D previous velocity vector. Each quantity is divided by 1000 to convert from mm/s to m/s, to make calculating beta simpler
-          relativistic_beta=velocity_magnitude/3e8
-          relativistic_gamma=1/(np.sqrt(1-relativistic_beta**2))
-          relativistic_mass=self.mass*relativistic_gamma
-          
+          #print("FINAL MOVEMENT INITIALISED")
+          #calculate relativistic gamma and use this to increase the particle mass to account for relativistic effects
+          relativistic_mass=self.mass*(calculate_gamma(self))        
           
           #identify which plane the particle went outside the tracking region on. Then calculate the time taken by solving the quadratic formula twice (once with a plus sign and once with a - sign). When solving the formula, replace the new position with the position of the tracking region boundary, so that the time taken to reach it is calculated accurately 
           if self.y > tracking_ymax:
@@ -214,15 +224,14 @@ class Particle:
                a=(self.charge*Ey*1e6)/(2*relativistic_mass) #multiplied by 1e6 to give units of mm/s^2
                b=self.previous_vy
                c=self.previous_y-tracking_ymax
-               final_timestep1=np.max(np.roots([a,b,c]))
-               final_timestep2=np.min(np.roots([a,b,c]))#np.root returns the two roots of the quadratic equation which is being solved to calculate the timestep required to reach the simulation boundary
+               final_timestep1,final_timestep2=np.roots([a,b,c]) #np.roots returns the two roots of the quadratic equation which is being solved to calculate the timestep required to reach the simulation boundary
+               #print("Final timestep roots are: "+str(final_timestep1)+"ns, or "+str(final_timestep2)+"ns.")
           elif self.y < tracking_ymin:
                Ey=efield['Ey'][field_row_number]
                a=(self.charge*Ey*1e6)/(2*relativistic_mass)
                b=self.previous_vy
                c=self.previous_y-tracking_ymin
                final_timestep1,final_timestep2=np.roots([a,b,c])
-               print("Final timestep roots are: "+str(final_timestep1)+"ns, or "+str(final_timestep2)+"ns.")
           elif self.x > tracking_xmax:
                Ex=efield['Ex'][field_row_number]
                a=(self.charge*Ex*1e6)/(2*relativistic_mass)
@@ -266,8 +275,7 @@ class Particle:
                print("*     (Both roots return negative times)      *")
                print("***********************************************")
                sys.exit()
-          
-          
+                   
           final_timesteps.append(final_timestep)
           #if final_timestep > 1e-9: print("Timestep too large...previous_y = "+str(self.previous_y)+", y = "+str(self.y)+", previous_vy = "+str(self.previous_vy)+", vy = "+str(self.y)+", Ey = "+str(Ey))
           self.move(timestep=final_timestep,final_track=True, plot=plot)
@@ -281,6 +289,25 @@ class Particle:
           particles.remove(self)
           #add the particles to a seperate list that stores the removed particles, in case extra analysis on these is required
           destroyed_particles.append(self)
+
+def calculate_gamma(self):
+     '''Returns the relativistic gamma of a particle based on it's input velocities in each cartesian plane.\n\n vx,vy and vz should be specified in mm/s'''
+     velocity_magnitude=(np.sqrt((self.previous_vx/1000)**2+(self.previous_vy/1000)**2+(self.previous_vz/1000)**2)) #calculate the magnitude of the 3D previous velocity vector. Each quantity is divided by 1000 to convert from mm/s to m/s, to make calculating beta simpler
+     relativistic_beta=velocity_magnitude/c
+     #print("\nCalculate_gamma has been called. Beta value = "+str(relativistic_beta)+"\n-->vy = "+str(self.vy)+", vz = "+str(self.vz)+", vx = "+str(self.vx)+"\n-->previous_vy = "+str(self.previous_vy)+" previous_vz = "+str(self.previous_vz)+"previous_vx = "+str(self.previous_vx)+"\n--> velocity magnitude = "+str(velocity_magnitude))
+     if relativistic_beta >= 1:
+          #scale the particle's velocities to set the overall magnitude equal to 99.9% the speed of light, to prevent beta >1 and gamma = infinity!
+          self.previous_vx = self.previous_vx/(1.001*relativistic_beta)
+          self.previous_vy = self.previous_vy/(1.001*relativistic_beta)
+          self.previous_vz = self.previous_vz/(1.001*relativistic_beta)
+          #recalculate particle velocity and beta as a check
+          velocity_magnitude=(np.sqrt((self.previous_vx/1000)**2+(self.previous_vy/1000)**2+(self.previous_vz/1000)**2)) #calculate the magnitude of the 3D previous velocity vector. Each quantity is divided by 1000 to convert from mm/s to m/s, to make calculating beta simpler
+          relativistic_beta=velocity_magnitude/c 
+          print("Recalculated Particle Beta = "+str(relativistic_beta))
+          print("**WARNING*** A particle tried to exceed the speed of light. It's velocity has been reduced to 0.999c, to stop the universe from imploding! \n-->Consider using a smaller timestep value")
+     relativistic_gamma=1/(np.sqrt(1-relativistic_beta**2))
+     #print("Gamma returned = "+str(relativistic_gamma))
+     return(relativistic_gamma)
 
 def normalise_list(data):
      '''Takes a python list as an input, converts it to a numpy array and normalises it'''
@@ -340,6 +367,7 @@ print('**********************************************************************')
 plt.close('all') #close anyt plots still open from previous runs of the code
 
 filepath=open_file_dialogue() #let the user choose a filepath graphically
+start_time=time.time() #Log the time to calculate the execution time of the code
 efield=import_CST_EField(filepath,nrows=None, model_horizontal_axis='z',model_vertical_axis='y',model_longitudinal_axis='x')
 #analyse the field map to obtain properties needed for data lookup in the field
 nrows,step_size,x_size,y_size,z_size,min_x,max_x,min_y,max_y,min_z,max_z=analyse_field_map(efield,printout=True)
@@ -352,23 +380,27 @@ particles=[] #an array to store all the particle objects in during tracking
 destroyed_particles=[] #an array to store particle objects that are removed from the simulation, usually because they have moved outside of the simulation region
 final_timesteps=[] #an array to view all the final timesteps calculated for particles - for use in debugging
 particle_num=1000 #the number of particles that should be generated inside the monitor
-tracking_steps=500
+tracking_steps=1000
+input_timestep=1e-9
 
-#create particles
+#------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+#GENERATE PARTICLE DISTIBUTION
 beam_xrad=54.9
 beam_yrad=41.5
 beam_xpos=0.86
 beam_ypos=-2.9
 for i in range (0,particle_num):
      #create a particle. --> Calculate the x and y positions as random numbers generated inside gaussian (normal) distributions for each axis. The distribution mean (loc) values are set to the beam offset positions, and the standard deviations (scale) are set to half of the beam width in CST (so that the 95% widths correspond to 2 signma, which is correct for a gaussian). Size is the number of points that the function generates
-     Particle(x=(np.random.normal(loc=beam_xpos,scale=0.5*beam_xrad,size=1)[0]),y=(np.random.normal(loc=beam_ypos,scale=0.5*beam_yrad,size=1)[0]),z=364,species='proton')
+     Particle(x=(np.random.normal(loc=beam_xpos,scale=0.5*beam_xrad,size=1)[0]),y=(np.random.normal(loc=beam_ypos,scale=0.5*beam_yrad,size=1)[0]),z=364,species='antiproton')
 print("There are "+str(len(particles))+" particles generated in the initial distribution.")
 
+#------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+#TRACK PARTICLES THROUGH ELECTRIC FIELD
 print("Tracking "+str(particle_num)+" particles through "+str(tracking_steps)+" timesteps.\nPlease wait...")
 print("0 ns tracked.",end=""  ) #end="" stops the output moving to a new line after printing this message (used to create a tidy progress readout in the output console)
 for i in range (0,tracking_steps): 
-    for particle in particles:
-         particle.move(plot=False)
+    for particle in reversed(particles): #iterate through the particles list in reversed order, so that if any particle objects are deleted from the particles list, the iteration onto the next element is not affected by the change in the list's overall size (when iterating from start to finish, if a particle is deleted, the element numbers for the remaining particles are reduced by 1, so they iterator misses out the next particle in the list)
+         particle.move(timestep=input_timestep, plot=False)
     print("\r"+str(i+1)+" ns tracked.", end="")#re-write to the console with an updated progress message. "\r" prints from the start of the current line on the console, to overwrite the previous time printout
 print("\nThere are "+str(len(particles))+" particles remaining in the simulation region.")
 
@@ -377,34 +409,35 @@ print("\nThere are "+str(len(particles))+" particles remaining in the simulation
 #generate an array of particle initial positions for plotting
 #Only use particles that have completed tracking and therefore been moved to destroyed particles
 #initial_positions[:,0] gives all the initial x positions. referencing with [:,1] or [:,2] would give y and z positions respectively
-initial_positions=np.array([0,0,0]) #initialise the array with a dummy set of 0's to make sure it has the right shape for stacking
+initial_positions=np.array([[0,0,0],[0,0,0]]) #initialise the array with a dummy set of 0's to make sure it has the right shape for stacking
 for particle in particles:
      particle_positions=np.array([particle.initial_x,particle.initial_y,particle.initial_z])
      initial_positions=np.vstack((initial_positions,particle_positions))
 for particle in destroyed_particles: 
      particle_positions=np.array([particle.initial_x,particle.initial_y,particle.initial_z])
      initial_positions=np.vstack((initial_positions,particle_positions))
-initial_positions=np.delete(initial_positions,0,0) #remove the dummy row from the top of the array
+initial_positions=np.delete(initial_positions,[0,1],0) #remove the dummy rows from the top of the array
 
 #generate an array of particle final positions for plotting
-final_positions=np.array([0,0,0]) #initialise the array with a dummy set of 0's to make sure it has the right shape for stacking
+final_positions=np.array([[0,0,0],[0,0,0]]) #initialise the array with a dummy set of 0's to make sure it has the right shape for stacking
 for particle in particles: 
      particle_positions=np.array([particle.x,particle.y,particle.z])
      final_positions=np.vstack((final_positions,particle_positions))
 for particle in destroyed_particles: 
      particle_positions=np.array([particle.final_x,particle.final_y,particle.final_z])
      final_positions=np.vstack((final_positions,particle_positions))
-final_positions=np.delete(final_positions,0,0) #remove the dummy row from the top of the array
+final_positions=np.delete(final_positions,[0,1],0) #remove the dummy rows from the top of the array
 
 if np.size(destroyed_particles) > 0:
-     detected_positions=np.array([0,0,0])
+     detected_positions=np.array([[0,0,0,0],[0,0,0,0]])
      for particle in destroyed_particles: 
-          if particle.final_y == tracking_ymax:
-               particle_positions=np.array([particle.final_x,particle.final_y,particle.final_z])
+          if np.round(particle.final_y,decimals=2) == tracking_ymax:
+               particle_positions=np.array([particle.final_x,particle.final_y,particle.final_z,particle.lifetime])
                detected_positions=np.vstack((detected_positions,particle_positions))
-     detected_positions=np.delete(detected_positions,0,0) #remove the dummy row from the top of the array
+     detected_positions=np.delete(detected_positions,[0,1],0) #remove the dummy rows from the top of the array
 if np.size(detected_positions) == 0 : print ("***There were no particles that reached the detectors.\n --> Consider increasing the number or length of timesteps, or double check the position of the detector")
-else:print("The number of particles reaching the detectors is: "+str(np.size(detected_positions[:,0])))
+else:print("The number of particles reaching the detectors is: "+str(np.size(detected_positions[:,0])+1))
+
 #PLOT DATA##########################################################################################################################
 
 #Plot the initial particle distribution
@@ -432,81 +465,29 @@ plt.xlabel('X (mm)')
 plt.ylabel('Y (mm)')
 plt.axis([-150,150,-150,150]) #the first 2 elements set the lower and upper x axis limits, the next 2 elements set the y axis range
 
+#plot time distribution of detected particles
+time_resolution=4e-9 #time resolution in seconds
+bin_num=int(np.ceil((tracking_steps*input_timestep)/time_resolution))
 
+if np.size(detected_positions) > 0:
+     plt.subplot(2,3,4)
+     plt.hist(detected_positions[:,3]*1e9, bins=bin_num, range=(0,(tracking_steps*input_timestep*1e9)), edgecolor='black')
+     plt.title("Time Structure of Detected Particles\n Resolution = "+str(time_resolution*1e9)+"ns")
+     plt.xlabel('Time Elapsed(ns)')
+     plt.ylabel('Particles Detected')     
+     
 plt.subplot(2,3,5)
 plt.hist(initial_positions[:,0],bins=40, range=(-120,120), edgecolor='black')
-plt.title("Initial Beam Profile (!TEST!)")
+plt.title("Initial Beam Profile")
 
 if np.size(destroyed_particles) > 0:
      plt.subplot(2,3,6)
      plt.hist(detected_positions[:,0],bins=40, range=(-120,120), edgecolor='black')
-     plt.title("Beam Profile At Channeltrons (!TEST!)")
+     plt.title("Beam Profile At Channeltrons")
 
 plt.tight_layout()
 plt.show()
 
-"""
-#test particle acceleration
-testy=Particle(x=0,y=0,z=100,species='electron',vx=0,vy=0,vz=0,lifetime=0)
-#print("Particle Created: Mass = "+str(testy.mass)+", Charge = "+str(testy.charge))
-test_efield=-333.333 #20kV over a 60mm gap is 333.333V/mm
-test_positions=[]
-velocities=[]
-betas=[]
-total_energies=[]
-kinetic_energies=[]
-timestep=1e-12
-
-for  i in range (0,15000):
-     testy.previous_x=testy.x
-     testy.previous_y=testy.y
-     testy.previous_z=testy.z
-     testy.previous_vx=testy.vx
-     testy.previous_vy=testy.vy
-     testy.previous_vz=testy.vz
-     
-     relativistic_beta=(np.sqrt((testy.previous_vx/1000)**2+(testy.previous_vy/1000)**2+(testy.previous_vz/1000)**2))/3e8 #calculate the magnitude of the 3D previous velocity vector and divide by 3e11 (speed of light in mm/s)
-     if relativistic_beta > 1 : 
-          relativistic_beta=0.99999999
-          print("Warning, beta tried to exceed 1. \n --> Beta was reduced to 0.99999999 to stop the universe breaking")
-     relativistic_gamma=1/(np.sqrt(1-relativistic_beta**2))
-     mass=testy.mass*relativistic_gamma     
-     total_energy=(relativistic_gamma*testy.mass*3e8*3e8)*6.242e12
-     betas.append(relativistic_beta)
-     total_energies.append(total_energy)
-     kinetic_energies.append(total_energy-((testy.mass*3e8*3e8)*6.242e12))
-     #print("Previous_Vx = "+str(testy.previous_vx)+"mm/s, Beta = "+str(relativistic_beta)+", Gamma = "+str(relativistic_gamma)+", Mass = "+str(mass)+"kg")
-     #Move the particle through one timestep calculating new positions and velocities using the Lorentz force applied by the EField at the particle's location
-     #calculate new positions after one timestep
-     testy.x=testy.previous_x+(testy.previous_vx*timestep)+(((testy.charge*timestep*timestep*test_efield)/(2*mass))*1e6) #*10e6 to convert the calculation of acceleration into mm/s^2 (using an input Efield given in V/mm)
-     testy.y=testy.previous_y+(testy.previous_vy*timestep)+(((testy.charge*timestep*timestep*0)/(2*mass))*1e6)
-     testy.z=testy.previous_z+(testy.previous_vz*timestep)+(((testy.charge*timestep*timestep*0)/(2*mass))*1e6)
-     #calculate new velocities after timestep
-     testy.vx=testy.previous_vx+(((testy.charge*timestep*test_efield)/(mass))*1e6)
-     testy.vy=testy.previous_vy+(((testy.charge*timestep*0)/(mass))*1e6)
-     testy.vz=testy.previous_vz+(((testy.charge*timestep*0)/(mass))*1e6)
-     test_positions.append(testy.x)
-     velocities.append(testy.vx/1000)#store velocities as m/s for plotting, not mm.s
-     #print("Charge = "+str(particle.charge)+", Mass = "+str(particle.mass)+", X Velocity = "+str(particle.vx))
-plt.figure()
-plt.plot(total_energies,velocities)
-plt.plot(kinetic_energies,betas)
-plt.title("Velocity vs. Proton Energy")
-plt.xlabel("Energies [MeV]")
-plt.ylabel("Relativistic Beta")
-plt.legend(["Total Energy","Kinetic Energy"])
-
-plt.figure()
-plt.plot(velocities)
-plt.title("Velocity (m/s) vs. Time (ps)")
-#normalise all plots
-test_positions=normalise_list(test_positions)
-total_energies=normalise_list(total_energies)
-kinetic_energies=normalise_list(kinetic_energies)
-velocities=normalise_list(velocities)
-
-plt.show()
-"""
-
+print("Excecution time = "+str(time.time()-start_time)+" seconds")
 print('***************************  END  ************************************')
 #######################################################################################################################################################################
