@@ -15,6 +15,7 @@ import math
 from tkinter import filedialog
 from tkinter import *
 import time
+from numba import jit
 
 #Define global variables
 #tracking region limits (from CST model, ymax is the detector co-ordinates, the z and x limits are the inside faces of the monitor body)
@@ -169,6 +170,7 @@ class Particle:
           else: print("Particle could not be generated - requested location ("+str(self.x)+","+str(self.y)+","+str(self.z)+") falls outside simulation region")
      
      def move(self,timestep=1e-9,plot=False,final_track=False):
+          running_times['particle move start']=time.time()
           if final_track==False: #if the particle is doing its final timestep, then these values have already been assigned and do not need to be assigned again
                #update the previous position values to the current position values
                self.previous_x=self.x
@@ -177,21 +179,33 @@ class Particle:
                self.previous_vx=self.vx
                self.previous_vy=self.vy
                self.previous_vz=self.vz
+          #running_times['field boundary check start']=time.time()
           field_row_number=lookup_field_value(self.previous_x,self.previous_y,self.previous_z,efield)
-          
+          #running_times['field boundary check finish']+=(time.time()-running_times['field boundary check start'])
           #calculate relativistic gamma and use this to increase the particle mass to account for relativistic effects
           relativistic_mass=self.mass*(calculate_gamma(self))
           
+          #look up field values one each - this operation is time consuming and therefore its best not to look each value up twice
+          Ex=efield['Ex'].values[int(field_row_number)]
+          Ey=efield['Ey'].values[int(field_row_number)]
+          Ez=efield['Ez'].values[int(field_row_number)]
+          
           #Move the particle through one timestep calculating new positions and velocities using the Lorentz force applied by the EField at the particle's location
           #calculate new positions after one timestep
-          self.x=self.previous_x+(self.previous_vx*timestep)+(((self.charge*timestep*timestep*efield['Ex'][field_row_number])/(2*relativistic_mass))*1e6)
-          self.y=self.previous_y+(self.previous_vy*timestep)+(((self.charge*timestep*timestep*efield['Ey'][field_row_number])/(2*relativistic_mass))*1e6)
-          self.z=self.previous_z+(self.previous_vz*timestep)+(((self.charge*timestep*timestep*efield['Ez'][field_row_number])/(2*relativistic_mass))*1e6)
+#          self.x=self.previous_x+(self.previous_vx*timestep)+(((self.charge*timestep*timestep*Ex)/(2*relativistic_mass))*1e6)
+#          self.y=self.previous_y+(self.previous_vy*timestep)+(((self.charge*timestep*timestep*Ey)/(2*relativistic_mass))*1e6)
+#          self.z=self.previous_z+(self.previous_vz*timestep)+(((self.charge*timestep*timestep*Ez)/(2*relativistic_mass))*1e6)
+         
           
           #calculate new velocities after timestep
-          self.vx=self.previous_vx+(((self.charge*timestep*efield['Ex'][field_row_number])/(relativistic_mass))*1e6)
-          self.vy=self.previous_vy+(((self.charge*timestep*efield['Ey'][field_row_number])/(relativistic_mass))*1e6)
-          self.vz=self.previous_vz+(((self.charge*timestep*efield['Ez'][field_row_number])/(relativistic_mass))*1e6)
+#          self.vx=self.previous_vx+(((self.charge*timestep*Ex)/(relativistic_mass))*1e6)
+#          self.vy=self.previous_vy+(((self.charge*timestep*Ey)/(relativistic_mass))*1e6)
+#          self.vz=self.previous_vz+(((self.charge*timestep*Ez)/(relativistic_mass))*1e6)
+
+#calculation called in a seperate, purely mathmatical function, optimised with the jit compiler to improve code speed.
+          self.x,self.vx=calculate_new_position_and_velocity(self.previous_x,self.previous_vx,timestep,self.charge,relativistic_mass,Ex)
+          self.y,self.vy=calculate_new_position_and_velocity(self.previous_y,self.previous_vy,timestep,self.charge,relativistic_mass,Ey)
+          self.z,self.vz=calculate_new_position_and_velocity(self.previous_z,self.previous_vz,timestep,self.charge,relativistic_mass,Ez)
           
           #Print position information for debugging
           #print("Ey = "+str(efield['Ey'][field_row_number])+", Previous Y = "+str(self.previous_y)+", Previous Vy = "+str(self.previous_vy)+", New Y_Position = "+str(self.y)+", New Y Velocity = "+str(self.vy)+", Timstep used = "+str(timestep))
@@ -205,14 +219,16 @@ class Particle:
                     self.lifetime=self.lifetime+timestep             
                     #plot the particle movement to the existing plot window if requested by the user
                     if plot==True:plt.plot([self.previous_x,self.x],[self.previous_y,self.y], color=self.plot_colour)
-          #If this is the final timestep, update particle lifetime, plot movement if requested, then destroy the particle
+                    running_times['particle move finished']+=(time.time()-running_times['particle move start'])
+          #If this is the final timestep, update particle lifetime, plot movement if requested, then destroy the particle         
           if final_track==True:
                self.lifetime=self.lifetime+timestep
                if plot==True:plt.plot([self.previous_x,self.x],[self.previous_y,self.y], color=self.plot_colour)
                #print("PARTICLE DESTROYED - Lifetime = "+str(self.lifetime)+" s")
                #destroy the particle
+               running_times['particle move finished']+=(time.time()-running_times['particle move start'])
                self.destroy()
-               
+       
      def perform_final_movement(self,field_row_number,plot): #use the particle's velocity, and the previous and new positions to precisely calculate the time taken to reach the tracking region boundary.
           #print("FINAL MOVEMENT INITIALISED")
           #calculate relativistic gamma and use this to increase the particle mass to account for relativistic effects
@@ -297,10 +313,34 @@ class Particle:
           #add the particles to a seperate list that stores the removed particles, in case extra analysis on these is required
           destroyed_particles.append(self)
 
+@jit
+def calculate_new_position_and_velocity(previous_x,previous_vx,timestep,charge,mass,efield_component):
+     x=previous_x+(previous_vx*timestep)+(((charge*timestep*timestep*efield_component)/(2*mass))*1e6)
+     vx=previous_vx+(((charge*timestep*efield_component)/(mass))*1e6)
+     return(x,vx)
+
+@jit
+def calculate_relativistic_beta(vx,vy,vz):
+     '''takes a 3D velocity vector in mm/s, converts to m/s, calculates the magnitude of the velocity, then calculates relativistic beta from this.\n\n This function has been seperated and decorated with @jit to increase performance.'''
+     #return(math.sqrt(math.pow((vx/1000),2)+math.pow((vy/1000),2)+math.pow((vz/1000),2))) #calculate the magnitude of the 3D previous velocity vector. Each quantity is divided by 1000 to convert from mm/s to m/s, to make calculating beta simpler
+     beta=(((((vx/1000)**2)+((vy/1000)**2)+((vz/1000)**2))**0.5)/c) #calculate the magnitude of the 3D previous velocity vector. Each quantity is divided by 1000 to convert from mm/s to m/s, to make calculating beta simpler
+     return(beta)
+     
+@jit
+def calculate_gamma_from_beta(beta):  
+     '''takes an input relativistic beta value and returns the equivalent relativistic gamma value.\n\n This function has been separated and decorated with @jit to increase performance.'''
+     relativistic_gamma=1/(math.sqrt(1-math.pow(beta,2)))
+     return(relativistic_gamma)
+
 def calculate_gamma(self):
+     #running_times['calculate gamma start']=time.time()
      '''Returns the relativistic gamma of a particle based on it's input velocities in each cartesian plane.\n\n vx,vy and vz should be specified in mm/s'''
-     velocity_magnitude=(np.sqrt((self.previous_vx/1000)**2+(self.previous_vy/1000)**2+(self.previous_vz/1000)**2)) #calculate the magnitude of the 3D previous velocity vector. Each quantity is divided by 1000 to convert from mm/s to m/s, to make calculating beta simpler
-     relativistic_beta=velocity_magnitude/c
+     
+     relativistic_beta=calculate_relativistic_beta(self.previous_vx,self.previous_vy,self.previous_vz)
+     
+     #velocity_magnitude=math.sqrt(math.pow((self.previous_vx/1000),2)+math.pow((self.previous_vy/1000),2)+math.pow((self.previous_vz/1000),2)) #calculate the magnitude of the 3D previous velocity vector. Each quantity is divided by 1000 to convert from mm/s to m/s, to make calculating beta simpler
+     #relativistic_beta=velocity_magnitude/c
+     
      #print("\nCalculate_gamma has been called. Beta value = "+str(relativistic_beta)+"\n-->vy = "+str(self.vy)+", vz = "+str(self.vz)+", vx = "+str(self.vx)+"\n-->previous_vy = "+str(self.previous_vy)+" previous_vz = "+str(self.previous_vz)+"previous_vx = "+str(self.previous_vx)+"\n--> velocity magnitude = "+str(velocity_magnitude))
      if relativistic_beta >= 1:
           #scale the particle's velocities to set the overall magnitude equal to 99.9% the speed of light, to prevent beta >1 and gamma = infinity!
@@ -308,12 +348,15 @@ def calculate_gamma(self):
           self.previous_vy = self.previous_vy/(1.001*relativistic_beta)
           self.previous_vz = self.previous_vz/(1.001*relativistic_beta)
           #recalculate particle velocity and beta as a check
-          velocity_magnitude=(np.sqrt((self.previous_vx/1000)**2+(self.previous_vy/1000)**2+(self.previous_vz/1000)**2)) #calculate the magnitude of the 3D previous velocity vector. Each quantity is divided by 1000 to convert from mm/s to m/s, to make calculating beta simpler
+          velocity_magnitude=math.sqrt(math.pow((self.previous_vx/1000),2)+math.pow((self.previous_vy/1000),2)+math.pow((self.previous_vz/1000),2))#calculate the magnitude of the 3D previous velocity vector. Each quantity is divided by 1000 to convert from mm/s to m/s, to make calculating beta simpler
           relativistic_beta=velocity_magnitude/c 
           print("Recalculated Particle Beta = "+str(relativistic_beta))
           print("**WARNING*** A particle tried to exceed the speed of light. It's velocity has been reduced to 0.999c, to stop the universe from imploding! \n-->Consider using a smaller timestep value")
-     relativistic_gamma=1/(np.sqrt(1-relativistic_beta**2))
-     #print("Gamma returned = "+str(relativistic_gamma))
+     
+     relativistic_gamma=calculate_gamma_from_beta(relativistic_beta)
+     #relativistic_gamma=1/(math.sqrt(1-math.pow(relativistic_beta,2)))
+          
+     #running_times['calculate gamma finished']+=(time.time()-running_times['calculate gamma start'])
      return(relativistic_gamma)
 
 def normalise_list(data):
@@ -321,15 +364,17 @@ def normalise_list(data):
      data=np.asarray(data)
      data=data/data.max()
      return(data)
-     
-def check_field_boundaries(x,y,z,field_data): 
+
+def check_field_boundaries(x,y,z,field_data):
      #REMOVED TO SPEED UP CODE - rely on values calculated when analyse field was last called in the main code -->
      #field_step_size=field_data['z'][1]-field_data['z'][0]
      #if x > (field_data['x'].max()+field_step_size/2) or y > (field_data['y'].max()+field_step_size/2) or z > (field_data['z'].max()+field_step_size/2) or x < (field_data['x'].min()-field_step_size/2) or y < (field_data['y'].min()-field_step_size/2) or z < (field_data['z'].min()-field_step_size/2):
      #if set_xmax==0
-     if x > (max_x+step_size/2) or y > (max_y+step_size/2) or z > (max_z+step_size/2) or x < (min_x-step_size/2) or y < (min_y-step_size/2) or z < (min_z-step_size/2):
+     if x > field_max_x or y > field_max_y or z > field_max_z or x < field_min_x or y < field_min_y or z < field_min_z:
+     #     running_times['field boundary check finished']+=(time.time()-running_times['field boundary check start'])
           return(False) #return false if the particle is outside the simulation region
      else:
+     #     running_times['field boundary check finished']+=(time.time()-running_times['field boundary check start'])
           return(True) #return true if the particle is still inside the simulation region
 
 def check_tracking_boundaries(x,y,z,set_xmax=tracking_xmax ,set_xmin=tracking_xmin, set_ymax=tracking_ymax, set_ymin=tracking_ymin, set_zmax=tracking_zmax,set_zmin=tracking_zmin):
@@ -337,7 +382,8 @@ def check_tracking_boundaries(x,y,z,set_xmax=tracking_xmax ,set_xmin=tracking_xm
           return(False)
      else:
           return(True)
-     
+
+  
 def lookup_field_value(x,y,z,field_data): #check whether a specified location falls inside the imported field region or not
      #calculate properties from the field map
      
@@ -348,7 +394,8 @@ def lookup_field_value(x,y,z,field_data): #check whether a specified location fa
      #z_size=field_data['z'].max()-field_data['z'].min()
      
      #check that the field value is inside the region covered by the field data
-     if check_field_boundaries(x,y,z,field_data)==False:  #if the requested location falls outside the range of the imported data, exit the program      
+     
+     if check_field_boundaries(x,y,z,field_data)==False: #if the requested location falls outside the range of the imported data, exit the program  
           print('\n*********************ERROR****************************')
           print("* EField location requested which is outside of field*\n")
           print("*  data range - check imported field dimensions and  *\n")
@@ -357,37 +404,55 @@ def lookup_field_value(x,y,z,field_data): #check whether a specified location fa
           sys.exit()
      else:     
           #find nearest value to the requested position
-          element_num=((np.round(((x-min_x)/step_size)))*(1+(y_size/2))*(1+(z_size/2)))+((np.round(((y-min_y)/step_size)))*(1+(z_size/2)))+(np.round(((z-min_z)/step_size)))
+          #call seperate function which has had @jit applied to speed it up loads
+          element_num=calculate_row_number(x,y,z)
           #REMOVED TO SPEED UP CODE, rely on field properties calculated by analyse field function in main code
           # element_num=((np.round(((x-field_data['x'].min())/step_size)))*(1+(y_size/2))*(1+(z_size/2)))+((np.round(((y-field_data['y'].min())/step_size)))*(1+(z_size/2)))+(np.round(((z-field_data['z'].min())/step_size)))
           
           return(element_num)
 
+@jit
+def calculate_row_number(x,y,z):
+     '''Takes an input x,y,z co-ordinate and returns the row number in the electric field file which is closest to that location. \n\n This function has been separated and decorated with @jit to increase performance.'''
+     #instead of rounding each number with np.round, np.int is used instead because it is much faster. This doesnt round, but instead just ignores everything after the decimal point. By adding 0.5 to each numebr before applying np.int, the result is the same as it would be if np.round had been used.
+     element_num=((np.int(((x-min_x)/step_size)+0.5))*(1+(y_size/2))*(1+(z_size/2)))+((np.int(((y-min_y)/step_size)+0.5))*(1+(z_size/2)))+(np.int(((z-min_z)/step_size)+0.5))
+     return(element_num)
 
 #######################################################################################################################################################################
 #MAIN PROGRAM
 print('**********************************************************************')
 print("*               ISIS IPM PARTICLE TRACKING CODE             CCW v3.0 *")
 print('**********************************************************************')
-
 #Import and Analyse the Electric Field From CST
 plt.close('all') #close anyt plots still open from previous runs of the code
 
-filepath=open_file_dialogue() #let the user choose a filepath graphically
-start_time=time.time() #Log the time to calculate the execution time of the code
+#filepath=open_file_dialogue() #let the user choose a filepath graphically
+filepath='C:\\Users\\vwa13369\\Desktop\\AccPhys 2016\\2019_Field_Maps\\-15kV_-1400VBias_2_27e13ppp_radx_54_9_rady_41_5_xoff_0_86_yoff_-2_9_CFOFF.txt'
+running_times={'start time':time.time(),'field boundary check start':0,'field boundary check finish':0,'calculate gamma start':0,'calculate gamma finished':0,'particle move start':0,'particle move finished':0} #Log the time to calculate the execution time of the code
+
 efield=import_CST_EField(filepath,nrows=None, model_horizontal_axis='z',model_vertical_axis='y',model_longitudinal_axis='x')
 #analyse the field map to obtain properties needed for data lookup in the field
 nrows,step_size,x_size,y_size,z_size,min_x,max_x,min_y,max_y,min_z,max_z=analyse_field_map(efield,printout=True)
+#calculate field boundaries - doing this here speeds up the runtime of functions that use these values in if statements
+field_max_x=max_x+step_size/2
+field_min_x=min_x-step_size/2
+field_max_y=max_y+step_size/2
+field_min_y=min_y-step_size/2
+field_max_z=max_z+step_size/2
+field_min_z=min_z-step_size/2
 
 print("Imported Data Sample:")
 print(efield.head())
+
+#Load the electric field data from the pandas dataframe into numpy arrays to increase performance
+#COMING SOON
 
 #generate an ion distribution
 particles=[] #an array to store all the particle objects in during tracking
 destroyed_particles=[] #an array to store particle objects that are removed from the simulation, usually because they have moved outside of the simulation region
 final_timesteps=[] #an array to view all the final timesteps calculated for particles - for use in debugging
-particle_num=1000 #the number of particles that should be generated inside the monitor
-tracking_steps=2000
+particle_num=2000 #the number of particles that should be generated inside the monitor
+tracking_steps=1000
 input_timestep=1e-9
 bunch_length=100e-9
 bunch_spacing=225e-9
@@ -400,14 +465,14 @@ beam_xrad=54.9
 beam_yrad=41.5
 beam_xpos=0.86
 beam_ypos=-2.9
-beam_length_mm=200
+beam_length_mm=1000
 detector_z_centre=364
 beam_zmin=detector_z_centre-(beam_length_mm/2)
 beam_zmax=detector_z_centre+(beam_length_mm/2)
 #make sure that the veam will not be generated outside of the simulation region
 if beam_zmax > tracking_zmax: beam_zmax=tracking_zmax
 if beam_zmin < tracking_zmin: beam_zmin=tracking_zmin
-
+running_times['start of beam generation']=time.time()
 for j in range(0,number_of_bunches):
      # to calculate bunch start time, in seconds in the loop below, use: bunch_start_time=(j*(bunch_spacing+bunch_length))*1e9
      for i in range(0,int(np.round(particle_num/number_of_bunches))):
@@ -418,10 +483,11 @@ for j in range(0,number_of_bunches):
           particle_z=np.random.uniform(low=beam_zmin,high=beam_zmax)
           Particle(x=particle_x,y=particle_y,z=particle_z,creation_time=particle_creation_time, species='antiproton')
 print("There are "+str(len(particles))+" particles generated in the initial distribution.")
-
+running_times['finished beam generation']=time.time()
 #------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 #TRACK PARTICLES THROUGH ELECTRIC FIELD
 simulation_time=0
+running_times['start tracking']=time.time()
 print("Tracking "+str(particle_num)+" particles through "+str(tracking_steps)+" timesteps.\nPlease wait...")
 print("0 ns tracked.",end=""  ) #end="" stops the output moving to a new line after printing this message (used to create a tidy progress readout in the output console)
 for i in range (0,tracking_steps): 
@@ -434,7 +500,7 @@ for i in range (0,tracking_steps):
     #print("Simulation Time = "+str(simulation_time))
     print("\r"+str(i+1)+" ns tracked. There are "+str(count)+" particles being tracked.", end="")#re-write to the console with an updated progress message. "\r" prints from the start of the current line on the console, to overwrite the previous time printout
 print("\nThere are "+str(len(particles))+" particles remaining in the simulation region.")
-
+running_times['finished tracking']=time.time()
 
 #ANALYSE RESULTS####################################################################################################################
 #generate an array of particle initial positions for plotting
@@ -533,7 +599,18 @@ if np.size(destroyed_particles) > 0:
 
 plt.tight_layout()
 plt.show()
-
-print("Excecution time = "+str(time.time()-start_time)+" seconds")
+running_times['program complete']=time.time()
+running_times['TOTAL PARTICLE.MOVE TIME']=running_times['particle move finished'] #cumulative total from each function call
+running_times['TOTAL CALCULATE GAMMA TIME']=running_times['calculate gamma finished'] #cumulative total from each function call
+running_times['TOTAL FIELD BOUNDARY CHECK TIME']=running_times['field boundary check finish'] #cumulative total from each function call
+running_times['PARTICLE TRACKING TOTAL TIME']=running_times['finished tracking']-running_times['start tracking']
+running_times['BEAM GENERATION TOTAL TIME']=running_times['finished beam generation']-running_times['start of beam generation']
+running_times['TOTAL PROGRAM TIME']=running_times['program complete']-running_times['start time']
+print('*************************  SUMMARY  **********************************')
+print("PROGRAM TIMING SUMMARY:")
+print(running_times)
+print("\n TOTAL TIME IN PARTICLE.MOVE = "+str(running_times['TOTAL PARTICLE.MOVE TIME'])+"\n TOTAL TRACKING TIME = "+str(running_times['PARTICLE TRACKING TOTAL TIME'])+"\n TOTAL EXECUTION TIME = "+str(running_times['TOTAL PROGRAM TIME']))
 print('***************************  END  ************************************')
+
+plt.close('all')
 #######################################################################################################################################################################
