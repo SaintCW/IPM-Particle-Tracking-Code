@@ -186,9 +186,13 @@ class Particle:
           relativistic_mass=self.mass*(calculate_gamma(self))
           
           #look up field values one each - this operation is time consuming and therefore its best not to look each value up twice
-          Ex=efield['Ex'].values[int(field_row_number)]
-          Ey=efield['Ey'].values[int(field_row_number)]
-          Ez=efield['Ez'].values[int(field_row_number)]
+          #Ex=efield['Ex'].values[int(field_row_number)]
+          #Ey=efield['Ey'].values[int(field_row_number)]
+          #Ez=efield['Ez'].values[int(field_row_number)]
+          
+          Ex=numpy_efield[int(field_row_number)][0]
+          Ey=numpy_efield[int(field_row_number)][1]
+          Ez=numpy_efield[int(field_row_number)][2]
           
           #Move the particle through one timestep calculating new positions and velocities using the Lorentz force applied by the EField at the particle's location
           #calculate new positions after one timestep
@@ -202,7 +206,7 @@ class Particle:
 #          self.vy=self.previous_vy+(((self.charge*timestep*Ey)/(relativistic_mass))*1e6)
 #          self.vz=self.previous_vz+(((self.charge*timestep*Ez)/(relativistic_mass))*1e6)
 
-#calculation called in a seperate, purely mathmatical function, optimised with the jit compiler to improve code speed.
+          #calculation called in a seperate, purely mathmatical function, optimised with the jit compiler to improve code speed.
           self.x,self.vx=calculate_new_position_and_velocity(self.previous_x,self.previous_vx,timestep,self.charge,relativistic_mass,Ex)
           self.y,self.vy=calculate_new_position_and_velocity(self.previous_y,self.previous_vy,timestep,self.charge,relativistic_mass,Ey)
           self.z,self.vz=calculate_new_position_and_velocity(self.previous_z,self.previous_vz,timestep,self.charge,relativistic_mass,Ez)
@@ -315,6 +319,7 @@ class Particle:
 
 @jit
 def calculate_new_position_and_velocity(previous_x,previous_vx,timestep,charge,mass,efield_component):
+     '''calculates the new position and velocity of a particle in one axis, as a result of the lorentx force applied on a charged particle by an electric field. \n\n The function requires inputs of the particles's: starting position, starting velocity, timestep size, charge, mass, and electric field present at the particle's location.'''
      x=previous_x+(previous_vx*timestep)+(((charge*timestep*timestep*efield_component)/(2*mass))*1e6)
      vx=previous_vx+(((charge*timestep*efield_component)/(mass))*1e6)
      return(x,vx)
@@ -383,7 +388,6 @@ def check_tracking_boundaries(x,y,z,set_xmax=tracking_xmax ,set_xmin=tracking_xm
      else:
           return(True)
 
-  
 def lookup_field_value(x,y,z,field_data): #check whether a specified location falls inside the imported field region or not
      #calculate properties from the field map
      
@@ -394,7 +398,6 @@ def lookup_field_value(x,y,z,field_data): #check whether a specified location fa
      #z_size=field_data['z'].max()-field_data['z'].min()
      
      #check that the field value is inside the region covered by the field data
-     
      if check_field_boundaries(x,y,z,field_data)==False: #if the requested location falls outside the range of the imported data, exit the program  
           print('\n*********************ERROR****************************')
           print("* EField location requested which is outside of field*\n")
@@ -407,8 +410,7 @@ def lookup_field_value(x,y,z,field_data): #check whether a specified location fa
           #call seperate function which has had @jit applied to speed it up loads
           element_num=calculate_row_number(x,y,z)
           #REMOVED TO SPEED UP CODE, rely on field properties calculated by analyse field function in main code
-          # element_num=((np.round(((x-field_data['x'].min())/step_size)))*(1+(y_size/2))*(1+(z_size/2)))+((np.round(((y-field_data['y'].min())/step_size)))*(1+(z_size/2)))+(np.round(((z-field_data['z'].min())/step_size)))
-          
+          # element_num=((np.round(((x-field_data['x'].min())/step_size)))*(1+(y_size/2))*(1+(z_size/2)))+((np.round(((y-field_data['y'].min())/step_size)))*(1+(z_size/2)))+(np.round(((z-field_data['z'].min())/step_size)))        
           return(element_num)
 
 @jit
@@ -417,6 +419,7 @@ def calculate_row_number(x,y,z):
      #instead of rounding each number with np.round, np.int is used instead because it is much faster. This doesnt round, but instead just ignores everything after the decimal point. By adding 0.5 to each numebr before applying np.int, the result is the same as it would be if np.round had been used.
      element_num=((np.int(((x-min_x)/step_size)+0.5))*(1+(y_size/2))*(1+(z_size/2)))+((np.int(((y-min_y)/step_size)+0.5))*(1+(z_size/2)))+(np.int(((z-min_z)/step_size)+0.5))
      return(element_num)
+
 
 #######################################################################################################################################################################
 #MAIN PROGRAM
@@ -445,14 +448,15 @@ print("Imported Data Sample:")
 print(efield.head())
 
 #Load the electric field data from the pandas dataframe into numpy arrays to increase performance
-#COMING SOON
+numpy_efield=efield[['Ex','Ey','Ez']].to_numpy()
+print("Electric field values loaded into seperate numpy array for fast access.")
 
 #generate an ion distribution
 particles=[] #an array to store all the particle objects in during tracking
 destroyed_particles=[] #an array to store particle objects that are removed from the simulation, usually because they have moved outside of the simulation region
 final_timesteps=[] #an array to view all the final timesteps calculated for particles - for use in debugging
-particle_num=2000 #the number of particles that should be generated inside the monitor
-tracking_steps=1000
+particle_num=5000 #the number of particles that should be generated inside the monitor
+tracking_steps=2000
 input_timestep=1e-9
 bunch_length=100e-9
 bunch_spacing=225e-9
@@ -484,6 +488,7 @@ for j in range(0,number_of_bunches):
           Particle(x=particle_x,y=particle_y,z=particle_z,creation_time=particle_creation_time, species='antiproton')
 print("There are "+str(len(particles))+" particles generated in the initial distribution.")
 running_times['finished beam generation']=time.time()
+
 #------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 #TRACK PARTICLES THROUGH ELECTRIC FIELD
 simulation_time=0
@@ -502,6 +507,7 @@ for i in range (0,tracking_steps):
 print("\nThere are "+str(len(particles))+" particles remaining in the simulation region.")
 running_times['finished tracking']=time.time()
 
+#------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 #ANALYSE RESULTS####################################################################################################################
 #generate an array of particle initial positions for plotting
 #Only use particles that have completed tracking and therefore been moved to destroyed particles
@@ -608,9 +614,8 @@ running_times['BEAM GENERATION TOTAL TIME']=running_times['finished beam generat
 running_times['TOTAL PROGRAM TIME']=running_times['program complete']-running_times['start time']
 print('*************************  SUMMARY  **********************************')
 print("PROGRAM TIMING SUMMARY:")
-print(running_times)
+#print(running_times)
 print("\n TOTAL TIME IN PARTICLE.MOVE = "+str(running_times['TOTAL PARTICLE.MOVE TIME'])+"\n TOTAL TRACKING TIME = "+str(running_times['PARTICLE TRACKING TOTAL TIME'])+"\n TOTAL EXECUTION TIME = "+str(running_times['TOTAL PROGRAM TIME']))
 print('***************************  END  ************************************')
 
-plt.close('all')
 #######################################################################################################################################################################
