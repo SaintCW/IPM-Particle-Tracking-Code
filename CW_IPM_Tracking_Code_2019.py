@@ -9,6 +9,7 @@ import sys
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from mpl_toolkits import mplot3d
 import scipy as sp
 from scipy import constants
 import math
@@ -19,6 +20,12 @@ from numba import jit
 
 #Define global variables
 #tracking region limits (from CST model, ymax is the detector co-ordinates, the z and x limits are the inside faces of the monitor body)
+detector_xmax=120
+detector_xmin=-120
+detector_y=116
+detector_zmax=374
+detector_zmin=354
+
 tracking_xmax=263
 tracking_xmin=-263
 tracking_ymax=116
@@ -28,6 +35,11 @@ tracking_zmin=66.5
 
 #assign physical constants to variable names
 c = sp.constants.c
+
+#generate lists arrays to hold the particle data. These are converted to numpy arrays after they have been populated, because it is quicker to append items to lists than nnumpy arrays
+particles=[] #an array to store all the particle objects in during tracking
+destroyed_particles=[] #an array to store particle objects that are removed from the simulation, usually because they have moved outside of the simulation region
+final_timesteps=[] #an array to view all the final timesteps calculated for particles - for use in debugging
 
 def open_file_dialogue():
      root=Tk()
@@ -127,7 +139,9 @@ def analyse_field_map(field_data,printout=False):
      return(nrows,step_size,x_size,y_size,z_size,min_x,max_x,min_y,max_y,min_z,max_z)
 
 class Particle:
-     def __init__(self,x,y,z,species,vx=0,vy=0,vz=0, lifetime=0, creation_time=0):
+     def __init__(self,x,y,z,species,ID,vx=0,vy=0,vz=0, lifetime=0, creation_time=0):
+          global particles
+
           #attach values to the particle's properties
           self.x=x
           self.y=y
@@ -143,6 +157,7 @@ class Particle:
           self.vy=vy
           self.vz=vz
           self.creation_time=creation_time
+          self.ID=ID
           if species=='proton':
                self.mass=1.6726219e-27
                self.charge=1.60217662e-19
@@ -166,8 +181,10 @@ class Particle:
           self.lifetime=0
           self.plot_colour=np.random.choice(range(256),size=3)/256 #generate a colour to plot the particle with on any trajectory graphs. This keeps the colour consistent even if each timestep of movement is plotted with different plot commands
           #check if the particle has been created inside the CST model or not
-          if check_tracking_boundaries(x=self.x,y=self.y,z=self.z): particles.append(self) #only create the particle if it's co-ordinates are within the simulation region
-          else: print("Particle could not be generated - requested location ("+str(self.x)+","+str(self.y)+","+str(self.z)+") falls outside simulation region")
+          if check_tracking_boundaries(x=self.x,y=self.y,z=self.z): 
+               particles.append(self) #only create the particle if it's co-ordinates are within the simulation region
+          else: 
+               print("Particle could not be generated - requested location ("+str(self.x)+","+str(self.y)+","+str(self.z)+") falls outside simulation region")
      
      def move(self,timestep=1e-9,plot=False,final_track=False):
           running_times['particle move start']=time.time()
@@ -222,12 +239,17 @@ class Particle:
                else:
                     self.lifetime=self.lifetime+timestep             
                     #plot the particle movement to the existing plot window if requested by the user
-                    if plot==True:plt.plot([self.previous_x,self.x],[self.previous_y,self.y], color=self.plot_colour)
+                    if plot==True:
+#                         plt.plot([self.previous_z,self.z],[self.previous_y,self.y], color=self.plot_colour, linewidth=0.5)
+                         #print("\n\nID="+str(self.ID)+", timestep_counter (i)="+str(i)+", Positions = ("+str(self.x)+","+str(self.y)+","+str(self.z)+").")
+                         #print(trajectories[self.ID,i,:])
+                         trajectories[self.ID,int(simulation_time/input_timestep),:]=[self.x,self.y,self.z] #i is the timestep number that the simulation is at, present in the loop in main that calls the main particle function
+                         #print(trajectories[self.ID,i,:])
                     running_times['particle move finished']+=(time.time()-running_times['particle move start'])
           #If this is the final timestep, update particle lifetime, plot movement if requested, then destroy the particle         
           if final_track==True:
                self.lifetime=self.lifetime+timestep
-               if plot==True:plt.plot([self.previous_x,self.x],[self.previous_y,self.y], color=self.plot_colour)
+               if plot==True: trajectories[self.ID,int(simulation_time/input_timestep),:]=[self.x,self.y,self.z] #i is the timestep number that the simulation is at, present in the loop in main that calls the main particle function
                #print("PARTICLE DESTROYED - Lifetime = "+str(self.lifetime)+" s")
                #destroy the particle
                running_times['particle move finished']+=(time.time()-running_times['particle move start'])
@@ -241,7 +263,7 @@ class Particle:
           #import pdb; pdb.set_trace()
           #identify which plane the particle went outside the tracking region on. Then calculate the time taken by solving the quadratic formula twice (once with a plus sign and once with a - sign). When solving the formula, replace the new position with the position of the tracking region boundary, so that the time taken to reach it is calculated accurately 
           if self.y > tracking_ymax:
-               Ey=efield['Ey'][field_row_number]
+               Ey=numpy_efield[int(field_row_number)][1]
                #calculate roots of the quadratic which calculates the final timestep (t_final = (-prev_vy +- sqrt(prev_vy**2-4(q*Ey/2*mass)(y-prev_y)))/(q*Ey/mass))
                a=(self.charge*Ey*1e6)/(2*relativistic_mass) #multiplied by 1e6 to give units of mm/s^2
                b=self.previous_vy
@@ -249,42 +271,43 @@ class Particle:
                final_timestep1=np.max(np.roots([a,b,c]))
                final_timestep2=np.min(np.roots([a,b,c])) #np.roots returns the two roots of the quadratic equation which is being solved to calculate the timestep required to reach the simulation boundary
           elif self.y < tracking_ymin:
-               Ey=efield['Ey'][field_row_number]
+               Ey=numpy_efield[int(field_row_number)][1]
                a=(self.charge*Ey*1e6)/(2*relativistic_mass)
                b=self.previous_vy
                c=self.previous_y-tracking_ymin
                final_timestep1=np.max(np.roots([a,b,c]))
                final_timestep2=np.min(np.roots([a,b,c]))
           elif self.x > tracking_xmax:
-               Ex=efield['Ex'][field_row_number]
+               Ex=numpy_efield[int(field_row_number)][0]
                a=(self.charge*Ex*1e6)/(2*relativistic_mass)
                b=self.previous_vx
                c=self.previous_x-tracking_xmax
                final_timestep1=np.max(np.roots([a,b,c]))
                final_timestep2=np.min(np.roots([a,b,c]))
           elif self.x < tracking_xmin:
-               Ex=efield['Ex'][field_row_number]
+               Ex=numpy_efield[int(field_row_number)][0]
                a=(self.charge*Ex*1e6)/(2*relativistic_mass)
                b=self.previous_vx
                c=self.previous_x-tracking_xmin
                final_timestep1=np.max(np.roots([a,b,c]))
                final_timestep2=np.min(np.roots([a,b,c]))
           elif self.z > tracking_zmax:
-               Ez=efield['Ez'][field_row_number]
+               Ez=numpy_efield[int(field_row_number)][2]
                a=(self.charge*Ez*1e6)/(2*relativistic_mass)
                b=self.previous_vz
                c=self.previous_z-tracking_zmax
                final_timestep1=np.max(np.roots([a,b,c]))
                final_timestep2=np.min(np.roots([a,b,c]))
           elif self.z < tracking_zmin:
-               Ez=efield['Ez'][field_row_number]
+               Ez=numpy_efield[int(field_row_number)][2]
                a=(self.charge*Ez*1e6)/(2*relativistic_mass)
                b=self.previous_vz
                c=self.previous_z-tracking_zmin
+               
                final_timestep1=np.max(np.roots([a,b,c]))
                final_timestep2=np.min(np.roots([a,b,c]))
           else:
-               print("******************ERROR*********************")
+               print("\n******************ERROR*********************")
                print("* Final movement method called incorrectly *")
                print("*   (No boundaries exceeded by particle)   *")
                print("********************************************")
@@ -297,7 +320,7 @@ class Particle:
           elif (final_timestep1 < 0 and final_timestep2 >= 0) or (final_timestep1 >= 0 and final_timestep2 < 0): final_timestep=np.max([final_timestep1,final_timestep2])
           #if both solutions are negative, return an error
           elif final_timestep1 < 0 and final_timestep2 < 0:
-               print("********************ERROR**********************")
+               print("\n********************ERROR**********************")
                print("*  Final movement timestep calculation error  *")
                print("*     (Both roots return negative times)      *")
                print("***********************************************")
@@ -308,12 +331,13 @@ class Particle:
           self.move(timestep=final_timestep,final_track=True, plot=plot)
 
      def destroy(self):
+          global particles
           #log the position as the particle's final position
           self.final_x=self.x
           self.final_y=self.y
           self.final_z=self.z
-          #remove the particle from the particles list
-          particles.remove(self)
+          #remove the particle from the particles array
+          particles=np.delete(particles,np.argwhere(particles==self)) #np.argwhere returns the index number of the particles array that contains the current particle. np.delete then deletes the particle at the index specified. This whole line is equivalent to particles.remove(self) if a python list was used, but this would be slower than a numpy array
           #add the particles to a seperate list that stores the removed particles, in case extra analysis on these is required
           destroyed_particles.append(self)
 
@@ -429,8 +453,8 @@ print('**********************************************************************')
 #Import and Analyse the Electric Field From CST
 plt.close('all') #close anyt plots still open from previous runs of the code
 
-#filepath=open_file_dialogue() #let the user choose a filepath graphically
-filepath='C:\\Users\\vwa13369\\Desktop\\AccPhys 2016\\2019_Field_Maps\\-15kV_-1400VBias_2_27e13ppp_radx_54_9_rady_41_5_xoff_0_86_yoff_-2_9_CFOFF.txt'
+filepath=open_file_dialogue() #let the user choose a filepath graphically
+#filepath='C:\\Users\\vwa13369\\Desktop\\AccPhys 2016\\2019_Field_Maps\\-15kV_-1400VBias_2_27e13ppp_radx_54_9_rady_41_5_xoff_0_86_yoff_-2_9_CFOFF.txt'
 running_times={'start time':time.time(),'field boundary check start':0,'field boundary check finish':0,'calculate gamma start':0,'calculate gamma finished':0,'particle move start':0,'particle move finished':0} #Log the time to calculate the execution time of the code
 
 efield=import_CST_EField(filepath,nrows=None, model_horizontal_axis='z',model_vertical_axis='y',model_longitudinal_axis='x')
@@ -452,16 +476,21 @@ numpy_efield=efield[['Ex','Ey','Ez']].to_numpy()
 print("Electric field values loaded into seperate numpy array for fast access.")
 
 #generate an ion distribution
-particles=[] #an array to store all the particle objects in during tracking
-destroyed_particles=[] #an array to store particle objects that are removed from the simulation, usually because they have moved outside of the simulation region
-final_timesteps=[] #an array to view all the final timesteps calculated for particles - for use in debugging
-particle_num=5000 #the number of particles that should be generated inside the monitor
+particle_num=50000 #the number of particles that should be generated inside the monitor
 tracking_steps=2000
 input_timestep=1e-9
 bunch_length=100e-9
 bunch_spacing=225e-9
 number_of_bunches=2
 time_resolution=16e-9 #time resolution in seconds
+plot_detected_only=True
+
+store_trajectories=True
+if store_trajectories:
+     trajectories=np.empty(((particle_num,tracking_steps,3)))
+     trajectories[:]=np.nan
+     print("Particle trajectory array created with dimensions (particle number,number of timesteps,position data) = "+str(np.shape(trajectories)))
+     print("***WARNING - CALCULATING PARTICLE TRAJECTORIES CAN BE MEMORY INTENSIVE.***\n***CONSIDER USING FEWER PARTICLES OR TIMESTEPS IF MEMORY IS A CONCERN***")
 
 #------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 #GENERATE PARTICLE DISTIBUTION
@@ -470,13 +499,18 @@ beam_yrad=41.5
 beam_xpos=0.86
 beam_ypos=-2.9
 beam_length_mm=1000
-detector_z_centre=364
+
+detector_z_centre=detector_zmin+((detector_zmax-detector_zmin)/2)
 beam_zmin=detector_z_centre-(beam_length_mm/2)
 beam_zmax=detector_z_centre+(beam_length_mm/2)
+print("Generating beam between: z_min="+str(beam_zmin)+"mm, and beam z_max="+str(beam_zmax)+"mm")
 #make sure that the veam will not be generated outside of the simulation region
 if beam_zmax > tracking_zmax: beam_zmax=tracking_zmax
 if beam_zmin < tracking_zmin: beam_zmin=tracking_zmin
+print('-----------------------------------------------------------------')
+print("\nGenerating beam with "+str(number_of_bunches)+" bunches, with a bunch length of "+str(bunch_length*1e9)+"ns, and inter-bunch spacing of "+str(bunch_spacing*1e9)+"ns...\n")
 running_times['start of beam generation']=time.time()
+particle_counter=1
 for j in range(0,number_of_bunches):
      # to calculate bunch start time, in seconds in the loop below, use: bunch_start_time=(j*(bunch_spacing+bunch_length))*1e9
      for i in range(0,int(np.round(particle_num/number_of_bunches))):
@@ -485,8 +519,11 @@ for j in range(0,number_of_bunches):
           particle_x=(np.random.normal(loc=beam_xpos,scale=0.5*beam_xrad,size=1)[0])
           particle_y=(np.random.normal(loc=beam_ypos,scale=0.5*beam_yrad,size=1)[0])
           particle_z=np.random.uniform(low=beam_zmin,high=beam_zmax)
-          Particle(x=particle_x,y=particle_y,z=particle_z,creation_time=particle_creation_time, species='antiproton')
-print("There are "+str(len(particles))+" particles generated in the initial distribution.")
+          Particle(x=particle_x,y=particle_y,z=particle_z,creation_time=particle_creation_time, species='proton',ID=particle_counter-1)
+          particle_counter=particle_counter+1
+print("Particle beam generated, containing "+str(len(particles))+" particles.")
+particles=np.array(particles)
+print("Particle list converted to numpy array for faster tracking.")
 running_times['finished beam generation']=time.time()
 
 #------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -495,11 +532,11 @@ simulation_time=0
 running_times['start tracking']=time.time()
 print("Tracking "+str(particle_num)+" particles through "+str(tracking_steps)+" timesteps.\nPlease wait...")
 print("0 ns tracked.",end=""  ) #end="" stops the output moving to a new line after printing this message (used to create a tidy progress readout in the output console)
-for i in range (0,tracking_steps): 
+for i in range (0,tracking_steps):
     count=0
     for particle in reversed(particles): #iterate through the particles list in reversed order, so that if any particle objects are deleted from the particles list, the iteration onto the next element is not affected by the change in the list's overall size (when iterating from start to finish, if a particle is deleted, the element numbers for the remaining particles are reduced by 1, so they iterator misses out the next particle in the list)
         if particle.creation_time <= simulation_time:
-             particle.move(timestep=input_timestep, plot=False) #move all particles unless they have not yet been generated
+             particle.move(timestep=input_timestep, plot=True) #move all particles unless they have not yet been generated
              count=count+1
     simulation_time=simulation_time+input_timestep
     #print("Simulation Time = "+str(simulation_time))
@@ -509,71 +546,121 @@ running_times['finished tracking']=time.time()
 
 #------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 #ANALYSE RESULTS####################################################################################################################
-#generate an array of particle initial positions for plotting
-#Only use particles that have completed tracking and therefore been moved to destroyed particles
-#initial_positions[:,0] gives all the initial x positions. referencing with [:,1] or [:,2] would give y and z positions respectively
-initial_positions=np.array([[0,0,0],[0,0,0]]) #initialise the array with a dummy set of 0's to make sure it has the right shape for stacking
+
+#generate an array of particles which reached the detector
+detected_particles=np.asarray([[particle.final_x,particle.final_y,particle.final_z,particle.initial_x,particle.initial_y,particle.initial_z,particle.creation_time,particle.lifetime] for particle in destroyed_particles if particle.final_y==116 and particle.final_x>=detector_xmin and particle.final_x<=detector_xmax and particle.final_z>=detector_zmin and particle.final_z<=detector_zmax])
+if np.size(detected_particles) == 0 :
+     print ("***There were no particles that reached the detectors.\n --> Consider increasing the number or length of timesteps, or double check the position of the detector")
+else:
+     print("The number of particles reaching the detectors is: "+str(np.size(detected_particles[:,0])))
+#generate an array containing ALL particle data for ease of plotting
 for particle in particles:
-     particle_positions=np.array([particle.initial_x,particle.initial_y,particle.initial_z])
-     initial_positions=np.vstack((initial_positions,particle_positions))
-for particle in destroyed_particles: 
-     particle_positions=np.array([particle.initial_x,particle.initial_y,particle.initial_z])
-     initial_positions=np.vstack((initial_positions,particle_positions))
-initial_positions=np.delete(initial_positions,[0,1],0) #remove the dummy rows from the top of the array
+     particle.final_x=particle.x
+     particle.final_y=particle.y
+     particle.final_z=particle.z
+all_particles=np.append(particles,destroyed_particles)
+#generate an array of each particle's initial position
+initial_positions=np.asarray([[particle.initial_x,particle.initial_y,particle.initial_z] for particle in all_particles])
+#generate an array of each particle's final position
+final_positions=np.asarray([[particle.x,particle.y,particle.z] for particle in all_particles])
+#generate an array of particle time properties
+particle_time_structure=np.asarray([[particle.creation_time,particle.lifetime] for particle in all_particles])
 
-#generate an array of particle final positions for plotting
-final_positions=np.array([[0,0,0],[0,0,0]]) #initialise the array with a dummy set of 0's to make sure it has the right shape for stacking
-for particle in particles: 
-     particle_positions=np.array([particle.x,particle.y,particle.z])
-     final_positions=np.vstack((final_positions,particle_positions))
-for particle in destroyed_particles: 
-     particle_positions=np.array([particle.final_x,particle.final_y,particle.final_z])
-     final_positions=np.vstack((final_positions,particle_positions))
-final_positions=np.delete(final_positions,[0,1],0) #remove the dummy rows from the top of the array
+particle_tracks=[]
+#generate an array of arrays, each containing a single particles trajectory data for 3D plotting (this is necessary as each particle trajectory is different lengths, once the NaN values are removed each row will be different lengths so needs to be in separate arrays)
+for i in range(0,np.size(trajectories[:,0,0])): #selects each particle from the trajectories array
+     #INDEXING: for trajectories[i,j,k]: i represents particle number, j is the time in the simulation, k is an [x,y,z] array containing position data
+     x_positions=trajectories[i,:,0][~np.isnan(trajectories[i,:,0])] #get every x position for he particle that is not a NaN value (~ is the numpy not operator)
+     y_positions=trajectories[i,:,1][~np.isnan(trajectories[i,:,1])]
+     z_positions=trajectories[i,:,2][~np.isnan(trajectories[i,:,2])]
+     if y_positions[-1]==116 and x_positions[-1]>=detector_xmin and x_positions[-1]<=detector_xmax and z_positions[-1]>=detector_zmin and z_positions[-1]<=detector_zmax: 
+          detected=True
+     else: detected=False
+     particle_tracks.append([x_positions,y_positions,z_positions,detected])
 
-if np.size(destroyed_particles) > 0:
-     detected_positions=np.array([[0,0,0,0,0],[0,0,0,0,0]])
-     for particle in destroyed_particles: 
-          if np.round(particle.final_y,decimals=2) == tracking_ymax:
-               particle_positions=np.array([particle.final_x,particle.final_y,particle.final_z,particle.creation_time,particle.lifetime])#record the position of each detected particle, and the time in simulation when they got to the detector
-               detected_positions=np.vstack((detected_positions,particle_positions))
-     detected_positions=np.delete(detected_positions,[0,1],0) #remove the dummy rows from the top of the array
-if np.size(detected_positions) == 0 : print ("***There were no particles that reached the detectors.\n --> Consider increasing the number or length of timesteps, or double check the position of the detector")
-else:print("The number of particles reaching the detectors is: "+str(np.size(detected_positions[:,0])+1))
+
 
 #PLOT DATA##########################################################################################################################
 
+#%%
+     
 #Plot the initial and final particle distributions in the transverse plane
 plt.figure(figsize=(15,10))
 plt.subplot(2,4,1)
-plt.scatter(initial_positions[:,0],initial_positions[:,1],s=1, color='orange')
-plt.scatter(final_positions[:,0],final_positions[:,1],s=1, color='C0')
-plt.title('Initial Particle Distribution (2D)')
+if not plot_detected_only:
+     plt.scatter(initial_positions[:,0],initial_positions[:,1],s=1, color='orange')
+     plt.scatter(final_positions[:,0],final_positions[:,1],s=1, color='C0')
+else:
+     if np.size(detected_particles)>0:
+          plt.scatter(detected_particles[:,3],detected_particles[:,4],s=1, color='orange')
+          plt.scatter(detected_particles[:,0],detected_particles[:,1],s=1, color='C0')
+plt.title('Initial Particle Distribution:\n Transverse Plane')
 plt.xlabel('X (mm)')
 plt.ylabel('Y (mm)')
 plt.axis([-150,150,-150,150]) #the first 2 elements set the lower and upper x axis limits, the next 2 elements set the y axis range
 
 #plot the initial and final particle distributions in the longitudinal plane
 plt.subplot(2,4,2)
-plt.scatter(initial_positions[:,2],initial_positions[:,1], s=1, color='orange')
-plt.scatter(final_positions[:,2],final_positions[:,1], s=1, color='C0')
-plt.title('Initial/Final Particle Distribution (2D)')
+if not plot_detected_only:
+     plt.scatter(initial_positions[:,2],initial_positions[:,1], s=1, color='orange')
+     plt.scatter(final_positions[:,2],final_positions[:,1], s=1, color='C0')
+
+else:
+     if np.size(detected_particles)>0:
+          plt.scatter(initial_positions[:,2],initial_positions[:,1],s=1, color='lightgray')
+          plt.scatter(detected_particles[:,5],detected_particles[:,4], s=1, color='orange')
+          plt.scatter(detected_particles[:,2],detected_particles[:,1], s=1, color='C0')
+plt.title('Initial/Final Particle Distribution\n Longitudinal Plane')
 plt.xlabel('Z (mm)')
 plt.ylabel('Y (mm)')
 plt.axis([min_z,max_z,-150,150]) #the first 2 elements set the lower and upper x axis limits, the next 2 elements set the y axis range
 
 #Plot rough particle tracks using initial and final positions
 plt.subplot(2,4,3)
-plt.plot(([initial_positions[:,0],final_positions[:,0]]),([initial_positions[:,1],final_positions[:,1]]), '--', linewidth=0.25)
-plt.title('Transverse Particle Trajectories (2D)')
+if not plot_detected_only:
+     #Rough 2-point trajectories
+     #plt.plot(([initial_positions[:,0],final_positions[:,0]]),([initial_positions[:,1],final_positions[:,1]]), '--', linewidth=0.25)
+     #full trajectories (slower to process)
+     for i in range(0,particle_num):
+          plt.plot(particle_tracks[i][0],particle_tracks[i][1],'--',linewidth=0.5)
+else:
+     if np.size(detected_particles)!=0:
+          #Rough 2-point trajectories
+#          plt.plot(([detected_particles[:,3],detected_particles[:,0]]),([detected_particles[:,4],detected_particles[:,1]]), '--', linewidth=0.25)
+          #Full accurate trajectory Plot (slower to process)
+          for i in range(0,particle_num):
+               if not particle_tracks[i][3]: #check if the particle reached the detector or not
+                    junk=1
+#                    if np.random.rand() >= 0.9: #plot 10% of the tracks for undetected particles
+#                         plt.plot(particle_tracks[i][0],particle_tracks[i][1],'--',linewidth=0.5,color='lightgray')
+               else: #plot all detected particle trajectories
+                    plt.plot(particle_tracks[i][0],particle_tracks[i][1],linewidth=0.5)
+plt.title('Detected Particle Trajectories:\n Horizontal Plane')
 plt.xlabel('X (mm)')
 plt.ylabel('Y (mm)')
 plt.axis([-150,150,-150,150]) #the first 2 elements set the lower and upper x axis limits, the next 2 elements set the y axis range
 
 plt.subplot(2,4,4)
-plt.title('Initial/Final Particle Distribution (2D)')
-plt.plot(([initial_positions[:,2],final_positions[:,2]]),([initial_positions[:,1],final_positions[:,1]]), '--', linewidth=0.25)
-plt.title('Longitudinal Particle Trajectories (2D)')
+if not plot_detected_only:
+     #Rough 2-point trajectories
+#     plt.plot(([initial_positions[:,2],final_positions[:,2]]),([initial_positions[:,1],final_positions[:,1]]), '--', linewidth=0.25)
+     #full trajectories (slower to process)
+     for i in range(0,particle_num):
+          plt.plot(particle_tracks[i][2],particle_tracks[i][1],'--',linewidth=0.5)
+else:
+     if np.size(detected_particles)>0:
+          #Rough 2-point trajectories
+          #plt.plot(([detected_particles[:,5],detected_particles[:,2]]),([detected_particles[:,4],detected_particles[:,1]]), '--', linewidth=0.25)
+     #full trajectories (slower to process)
+          for i in range(0,particle_num):
+               if not particle_tracks[i][3]: #check if particle reached the detector or not
+                    junk=1
+#                    if np.random.rand() >= 0.9: #plot 10% of the tracks for undetected particles
+#                         plt.plot(particle_tracks[i][2],particle_tracks[i][1],'--',linewidth=0.2,color='lightgray')
+               else: #and plot all the trajectories of detected particles
+                    plt.plot(particle_tracks[i][2],particle_tracks[i][1],linewidth=0.5)                    
+          
+plt.title('Detected Particle Trajectories:\n Longitudinal Plane')
 plt.xlabel('Z (mm)')
 plt.ylabel('Y (mm)')
 plt.axis([min_z,max_z,-150,150]) #the first 2 elements set the lower and upper x axis limits, the next 2 elements set the y axis range
@@ -582,28 +669,42 @@ plt.axis([min_z,max_z,-150,150]) #the first 2 elements set the lower and upper x
 bin_num=int(np.ceil((tracking_steps*input_timestep)/time_resolution))
 
 plt.subplot(2,4,5)
-plt.hist(detected_positions[:,3]*1e9, bins=bin_num, range=(0,(tracking_steps*input_timestep*1e9)), edgecolor='black', color='orange')
+plt.hist(particle_time_structure[:,0]*1e9, bins=bin_num, range=(0,(tracking_steps*input_timestep*1e9)), edgecolor='black', color='orange')
 plt.title("Time Structure of Particles Created\n Resolution = "+str(time_resolution*1e9)+"ns")
 plt.xlabel('Time Elapsed(ns)')
 plt.ylabel('Particles Detected')   
      
-if np.size(detected_positions) > 0:
-     plt.subplot(2,4,6)
-     plt.hist((detected_positions[:,3]+detected_positions[:,4])*1e9, bins=bin_num, range=(0,(tracking_steps*input_timestep*1e9)), edgecolor='black')
-     plt.title("Time Structure of Detected Particles\n Resolution = "+str(time_resolution*1e9)+"ns")
-     plt.xlabel('Time Elapsed(ns)')
-     plt.ylabel('Particles Detected')     
+plt.subplot(2,4,6)
+plt.title("Time Structure of Detected Particles\n Resolution = "+str(time_resolution*1e9)+"ns")
+plt.xlabel('Time Elapsed(ns)')
+plt.ylabel('Particles Detected')     
+if np.size(detected_particles) > 0:
+     plt.hist((detected_particles[:,6]+detected_particles[:,7])*1e9, bins=bin_num, range=(0,(tracking_steps*input_timestep*1e9)), edgecolor='black')
      
 plt.subplot(2,4,7)
 plt.hist(initial_positions[:,0],bins=40, range=(-120,120), edgecolor='black', color='orange')
 plt.title("Initial Beam Profile")
 
-if np.size(destroyed_particles) > 0:
-     plt.subplot(2,4,8)
-     plt.hist(detected_positions[:,0],bins=40, range=(-120,120), edgecolor='black')
-     plt.title("Beam Profile At Channeltrons")
+plt.subplot(2,4,8)
+plt.title("Beam Profile At Channeltrons")
+if np.size(detected_particles) > 0:
+     plt.hist(detected_particles[:,0],bins=40, range=(-120,120), edgecolor='black')
 
 plt.tight_layout()
+
+#plot particle trajectories
+#
+#plt.figure()
+#plt.title("Particle Trajectories within the IPM")
+#ax=plt.axes(projection="3d")
+#ax.set_xlabel('z (mm)')
+#ax.set_ylabel('x (mm)')
+#ax.set_zlabel('y (mm)')
+#for i in range(0,particle_num):
+#     if particle_tracks[i][3]: #check if particle reached the detector or not  
+#          ax.plot3D(particle_tracks[i][2],particle_tracks[i][0],particle_tracks[i][1])
+     #plt.plot(particle_tracks[i][0],particle_tracks[i][1],particle_tracks[i][2])
+
 plt.show()
 running_times['program complete']=time.time()
 running_times['TOTAL PARTICLE.MOVE TIME']=running_times['particle move finished'] #cumulative total from each function call
@@ -614,7 +715,7 @@ running_times['BEAM GENERATION TOTAL TIME']=running_times['finished beam generat
 running_times['TOTAL PROGRAM TIME']=running_times['program complete']-running_times['start time']
 print('*************************  SUMMARY  **********************************')
 print("PROGRAM TIMING SUMMARY:")
-#print(running_times)
+print(running_times)
 print("\n TOTAL TIME IN PARTICLE.MOVE = "+str(running_times['TOTAL PARTICLE.MOVE TIME'])+"\n TOTAL TRACKING TIME = "+str(running_times['PARTICLE TRACKING TOTAL TIME'])+"\n TOTAL EXECUTION TIME = "+str(running_times['TOTAL PROGRAM TIME']))
 print('***************************  END  ************************************')
 
