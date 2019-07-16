@@ -26,6 +26,8 @@ detector_y=116
 detector_zmax=374
 detector_zmin=354
 
+
+##DOUBLE CHECK THESE SETTINGS WHEN DIMENSIONS ARE CHANGED, THEY DO NOT UPDATE IN THE CHECK_BOUNDARIES FUNCTION EVEN IF THEY ARE CHANGED IN THE MAIN PROGRAM LOOP
 tracking_xmax=263
 tracking_xmin=-263
 tracking_ymax=116
@@ -138,6 +140,27 @@ def analyse_field_map(field_data,printout=False):
      print('-----------------------------------------------------------------')
      return(nrows,step_size,x_size,y_size,z_size,min_x,max_x,min_y,max_y,min_z,max_z)
 
+def DrawMonitor(plotname):
+        ctron_height=8
+        plotname.plot([detzmin,detzmin,detzmax,detzmax,detzmin],[detxmin,detxmax,detxmax,detxmin,detxmin],[dety,dety,dety,dety,dety],c='black')
+        plotname.plot([detzmin,detzmin+8,detzmin+8,detzmin+8,detzmin+8,detzmin],[detxmin,detxmin,detxmin,detxmax,detxmax,detxmax],[dety,dety+ctron_height+6,dety+ctron_height*8,dety+ctron_height*8,dety+ctron_height,dety],c='black')
+        plotname.plot([detzmax,detzmax-8,detzmax-8,detzmax-8,detzmax-8,detzmax],[detxmin,detxmin,detxmin,detxmax,detxmax,detxmax],[dety,dety+ctron_height+6,dety+ctron_height*8,dety+ctron_height*8,dety+ctron_height,dety],c='black')
+        plotname.plot([detzmax-8,detzmin+8],[detxmin,detxmin],[dety+ctron_height*8,dety+ctron_height*8],c='black')
+        plotname.plot([detzmax-8,detzmin+8],[detxmax,detxmax],[dety+ctron_height*8,dety+ctron_height*8],c='black')
+        
+        #Draw the Earth Plate with its slot
+        plotname.plot([309.5,418.5],[212.5,212.5],[dety-6,dety-6],c='black')
+        plotname.plot([309.5,418.5],[-212.5,-212.5],[dety-6,dety-6],c='black')
+        
+        plotname.plot([detzmin,detzmin,detzmax,detzmax,detzmin],[detxmin,detxmax,detxmax,detxmin,detxmin],[dety-6,dety-6,dety-6,dety-6,dety-6],c='black')
+        plotname.plot([309.5,309.5],[-212.5,212.5],[dety-6,dety-6],c='black')
+        plotname.plot([418.5,418.5],[-212.5,212.5],[dety-6,dety-6],c='black')
+        
+        plotname.plot([309.5,309.5],[-212.5,-212.5],[dety-6,dety+ctron_height*8],c='black')
+        plotname.plot([418.5,418.5],[-212.5,-212.5],[dety-6,dety+ctron_height*8],c='black')
+        plotname.plot([309.5,309.5],[212.5,212.5],[dety-6,dety+ctron_height*8],c='black')
+        plotname.plot([418.5,418.5],[212.5,212.5],[dety-6,dety+ctron_height*8],c='black')
+
 class Particle:
      def __init__(self,x,y,z,species,ID,vx=0,vy=0,vz=0, lifetime=0, creation_time=0):
           global particles
@@ -158,6 +181,7 @@ class Particle:
           self.vz=vz
           self.creation_time=creation_time
           self.ID=ID
+          self.species=species
           if species=='proton':
                self.mass=1.6726219e-27
                self.charge=1.60217662e-19
@@ -406,8 +430,8 @@ def check_field_boundaries(x,y,z,field_data):
      #     running_times['field boundary check finished']+=(time.time()-running_times['field boundary check start'])
           return(True) #return true if the particle is still inside the simulation region
 
-def check_tracking_boundaries(x,y,z,set_xmax=tracking_xmax ,set_xmin=tracking_xmin, set_ymax=tracking_ymax, set_ymin=tracking_ymin, set_zmax=tracking_zmax,set_zmin=tracking_zmin):
-     if x > set_xmax or y > set_ymax or z > set_zmax or x < set_xmin or y < set_ymin or z < set_zmin:
+def check_tracking_boundaries(x,y,z):
+     if x > tracking_xmax or y > tracking_ymax or z > tracking_zmax or x < tracking_xmin or y < tracking_ymin or z < tracking_zmin:
           return(False)
      else:
           return(True)
@@ -441,9 +465,34 @@ def lookup_field_value(x,y,z,field_data): #check whether a specified location fa
 def calculate_row_number(x,y,z):
      '''Takes an input x,y,z co-ordinate and returns the row number in the electric field file which is closest to that location. \n\n This function has been separated and decorated with @jit to increase performance.'''
      #instead of rounding each number with np.round, np.int is used instead because it is much faster. This doesnt round, but instead just ignores everything after the decimal point. By adding 0.5 to each numebr before applying np.int, the result is the same as it would be if np.round had been used.
-     element_num=((np.int(((x-min_x)/step_size)+0.5))*(1+(y_size/2))*(1+(z_size/2)))+((np.int(((y-min_y)/step_size)+0.5))*(1+(z_size/2)))+(np.int(((z-min_z)/step_size)+0.5))
+     element_num=((np.int(((x-min_x)/step_size)+0.5))*(1+(y_size/step_size))*(1+(z_size/step_size)))+((np.int(((y-min_y)/step_size)+0.5))*(1+(z_size/step_size)))+(np.int(((z-min_z)/step_size)+0.5))
      return(element_num)
 
+
+def calculate_95_width(profile_x,profile_y):
+     '''Returns the 95% width of the input profile.The output width will have the same dimensions as the input profile_x array
+     
+     E.G. For a horizontal profile measurement at ISIS, profile_x should contain the positions of the centre of each channeltron, and 
+     profile_y should contain the measured beam profile, i.e. the particles measured by each channeltron.'''
+     spacing=profile_x[1]-profile_x[0]
+     lower_boundary=np.sum(profile_y)*0.025
+     upper_boundary=np.sum(profile_y)*0.975
+     cumsum=0
+     i=0
+     for data in profile_y:
+          cumsum=cumsum+data
+          if cumsum >= lower_boundary: break
+          i=i+1
+     lower_location=i*spacing
+     cumsum=np.sum(profile_y)
+     i=np.size(profile_y)
+     for data in reversed(profile_y):
+          cumsum=cumsum-data
+          if cumsum <= upper_boundary: break
+          i=i-1
+     upper_location=i*spacing
+     width95=upper_location-lower_location
+     return(width95)
 
 #######################################################################################################################################################################
 #MAIN PROGRAM
@@ -454,9 +503,13 @@ print('**********************************************************************')
 plt.close('all') #close anyt plots still open from previous runs of the code
 
 filepath=open_file_dialogue() #let the user choose a filepath graphically
+filepath_nobeam=open_file_dialogue() #ask
+
 #filepath='C:\\Users\\vwa13369\\Desktop\\AccPhys 2016\\2019_Field_Maps\\-15kV_-1400VBias_2_27e13ppp_radx_54_9_rady_41_5_xoff_0_86_yoff_-2_9_CFOFF.txt'
 running_times={'start time':time.time(),'field boundary check start':0,'field boundary check finish':0,'calculate gamma start':0,'calculate gamma finished':0,'particle move start':0,'particle move finished':0} #Log the time to calculate the execution time of the code
 
+
+#IMPORT EFIELD, ANALYSE AND CONVERT TO NUMPY----------------------------------------------------------------------------------------------------------------------
 efield=import_CST_EField(filepath,nrows=None, model_horizontal_axis='z',model_vertical_axis='y',model_longitudinal_axis='x')
 #analyse the field map to obtain properties needed for data lookup in the field
 nrows,step_size,x_size,y_size,z_size,min_x,max_x,min_y,max_y,min_z,max_z=analyse_field_map(efield,printout=True)
@@ -468,6 +521,14 @@ field_min_y=min_y-step_size/2
 field_max_z=max_z+step_size/2
 field_min_z=min_z-step_size/2
 
+#check that requested trackingboundaries are not larger than the imported Efield size
+if tracking_xmax > field_max_x: tracking_xmax=field_max_x
+if tracking_xmin < field_min_x: tracking_xmin=field_min_x
+if tracking_ymax > field_max_y: tracking_ymax=field_max_y
+if tracking_ymin < field_min_y: tracking_ymin=field_min_y
+if tracking_zmax > field_max_z: tracking_zmax=field_max_z
+if tracking_zmin < field_min_z: tracking_zmin=field_min_z
+
 print("Imported Data Sample:")
 print(efield.head())
 
@@ -475,8 +536,10 @@ print(efield.head())
 numpy_efield=efield[['Ex','Ey','Ez']].to_numpy()
 print("Electric field values loaded into seperate numpy array for fast access.")
 
+#--------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
 #generate an ion distribution
-particle_num=50000 #the number of particles that should be generated inside the monitor
+particle_num=5000 #the number of particles that should be generated inside the monitor
 tracking_steps=2000
 input_timestep=1e-9
 bunch_length=100e-9
@@ -503,12 +566,14 @@ beam_length_mm=1000
 detector_z_centre=detector_zmin+((detector_zmax-detector_zmin)/2)
 beam_zmin=detector_z_centre-(beam_length_mm/2)
 beam_zmax=detector_z_centre+(beam_length_mm/2)
-print("Generating beam between: z_min="+str(beam_zmin)+"mm, and beam z_max="+str(beam_zmax)+"mm")
+
 #make sure that the veam will not be generated outside of the simulation region
 if beam_zmax > tracking_zmax: beam_zmax=tracking_zmax
 if beam_zmin < tracking_zmin: beam_zmin=tracking_zmin
+
 print('-----------------------------------------------------------------')
-print("\nGenerating beam with "+str(number_of_bunches)+" bunches, with a bunch length of "+str(bunch_length*1e9)+"ns, and inter-bunch spacing of "+str(bunch_spacing*1e9)+"ns...\n")
+print("Generating beam between: z_min="+str(beam_zmin)+"mm, and beam z_max="+str(beam_zmax)+"mm.")
+print("\Beam Properties:\n - No. Bunches = "+str(number_of_bunches)+"\n - Bunch length = "+str(bunch_length*1e9)+"ns\n - Inter-bunch spacing = "+str(bunch_spacing*1e9)+"ns \n Generating...\n")
 running_times['start of beam generation']=time.time()
 particle_counter=1
 for j in range(0,number_of_bunches):
@@ -529,9 +594,38 @@ running_times['finished beam generation']=time.time()
 #------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 #TRACK PARTICLES THROUGH ELECTRIC FIELD
 simulation_time=0
+#calculate field transition times from bunch structure
+#caution, only works for timesteps that are picosecond or larger
+transition_times=[]
+print("\n Calculating field transition times frombunch structure...")
+#calculate field transition times and save them...values will be SAVED IN NANOSECONDS to reduce the danger of floating point erithmetic errors
+for bunch_num in range(0,number_of_bunches):
+     if bunch_num==0: 
+          transition_times.append(bunch_length*1e9)
+          print(bunch_length)
+     else: #the rounding and the *1e9 and /1e9 operations are to deal with floating point arithmetic errors that creep in here due to the small timestep values
+          transition_times.append(np.around(((bunch_length*(bunch_num))+(bunch_spacing*(bunch_num)))*1e9,decimals=6))
+          transition_times.append(np.around(((bunch_length*(bunch_num+1))+(bunch_spacing*(bunch_num)))*1e9,decimals=6))
+          print(np.around(((bunch_length*(bunch_num))+(bunch_spacing*(bunch_num)))*1e9,decimals=6)/1e9)
+          print(np.around(((bunch_length*(bunch_num+1))+(bunch_spacing*(bunch_num)))*1e9,decimals=6)/1e9)
+for time_value in transition_times:
+     #check that all of the calculated field transition times are divisible by the simulation timestep, so that the code will be able to stop the simulation and swap fields whenever needed
+     if (time_value)%(input_timestep*1e9)!=0: #*1e9 to remove floating poiont arithmetic errors
+          print("Transition time = "+str(time_value)+"ns, Simulation timestep = "+str(input_timestep*1e9)+"ns.")
+          print("****************************************")
+          print("* ERROR - Timestep and bunch structure *")
+          print("* are not divisible. Beam field cannot *")
+          print("* be swapped on/off at correct times.  *")
+          print("*    Please change the specified       *")
+          print("*  timestep and re-run the program.    *")
+          print("****************************************")
+          sys.exit()
+transition_times.append(np.round(tracking_steps*input_timestep*1e9,decimals=6)+1)#append a final value to the transition times that will never be reached, to prevent indexing errors in the code later on
+
 running_times['start tracking']=time.time()
 print("Tracking "+str(particle_num)+" particles through "+str(tracking_steps)+" timesteps.\nPlease wait...")
 print("0 ns tracked.",end=""  ) #end="" stops the output moving to a new line after printing this message (used to create a tidy progress readout in the output console)
+transition_count=0
 for i in range (0,tracking_steps):
     count=0
     for particle in reversed(particles): #iterate through the particles list in reversed order, so that if any particle objects are deleted from the particles list, the iteration onto the next element is not affected by the change in the list's overall size (when iterating from start to finish, if a particle is deleted, the element numbers for the remaining particles are reduced by 1, so they iterator misses out the next particle in the list)
@@ -541,8 +635,18 @@ for i in range (0,tracking_steps):
     simulation_time=simulation_time+input_timestep
     #print("Simulation Time = "+str(simulation_time))
     print("\r"+str(i+1)+" ns tracked. There are "+str(count)+" particles being tracked.", end="")#re-write to the console with an updated progress message. "\r" prints from the start of the current line on the console, to overwrite the previous time printout
+    if (np.round(simulation_time*1e9,decimals=6)==transition_times[transition_count]):
+         print("\n*****NEED TO SWAP EFIELD!*****\n")
+         transition_count=transition_count+1
 print("\nThere are "+str(len(particles))+" particles remaining in the simulation region.")
 running_times['finished tracking']=time.time()
+
+
+
+
+
+
+
 
 #------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 #ANALYSE RESULTS####################################################################################################################
@@ -567,17 +671,22 @@ final_positions=np.asarray([[particle.x,particle.y,particle.z] for particle in a
 particle_time_structure=np.asarray([[particle.creation_time,particle.lifetime] for particle in all_particles])
 
 particle_tracks=[]
+untracked_particles=0
 #generate an array of arrays, each containing a single particles trajectory data for 3D plotting (this is necessary as each particle trajectory is different lengths, once the NaN values are removed each row will be different lengths so needs to be in separate arrays)
 for i in range(0,np.size(trajectories[:,0,0])): #selects each particle from the trajectories array
      #INDEXING: for trajectories[i,j,k]: i represents particle number, j is the time in the simulation, k is an [x,y,z] array containing position data
      x_positions=trajectories[i,:,0][~np.isnan(trajectories[i,:,0])] #get every x position for he particle that is not a NaN value (~ is the numpy not operator)
      y_positions=trajectories[i,:,1][~np.isnan(trajectories[i,:,1])]
      z_positions=trajectories[i,:,2][~np.isnan(trajectories[i,:,2])]
-     if y_positions[-1]==116 and x_positions[-1]>=detector_xmin and x_positions[-1]<=detector_xmax and z_positions[-1]>=detector_zmin and z_positions[-1]<=detector_zmax: 
-          detected=True
-     else: detected=False
-     particle_tracks.append([x_positions,y_positions,z_positions,detected])
+     #if particles were generated outside of the simulation region, they wont have any trajectory information, so np.size will return 0. If this is the case, skip and move on to the next particle
+     if np.size(x_positions)!=0:
+          if y_positions[-1]==116 and x_positions[-1]>=detector_xmin and x_positions[-1]<=detector_xmax and z_positions[-1]>=detector_zmin and z_positions[-1]<=detector_zmax: 
+               detected=True
+          else: detected=False
+          particle_tracks.append([x_positions,y_positions,z_positions,detected])
+     else: untracked_particles=untracked_particles+1
 
+particle_num=particle_num-untracked_particles
 
 
 #PLOT DATA##########################################################################################################################
@@ -690,7 +799,13 @@ plt.title("Beam Profile At Channeltrons")
 if np.size(detected_particles) > 0:
      plt.hist(detected_particles[:,0],bins=40, range=(-120,120), edgecolor='black')
 
+#set the layout up so there is space for information text below the plots
 plt.tight_layout()
+plt.subplots_adjust(bottom=0.15)
+plt.figtext(0.05,0.08,'Simulation Details',weight='bold')
+plt.figtext(0.05,0.06,'Electric Field Information: Imported Step Size = '+str(step_size)+' mm, X Max = '+str(max_x)+' mm, X Min = '+str(min_x)+", Y Max = "+str(max_y)+' mm, Y Min = '+str(min_y)+', Z Max = '+str(max_z)+' mm, Z Min = '+str(min_z)+'mm')
+plt.figtext(0.05,0.04,'Type of particles tracked = '+particle.species+"s")
+plt.figtext(0.05,0.02,'Electric Field Filepath: '+filepath)
 
 #plot particle trajectories
 #
@@ -705,7 +820,36 @@ plt.tight_layout()
 #          ax.plot3D(particle_tracks[i][2],particle_tracks[i][0],particle_tracks[i][1])
      #plt.plot(particle_tracks[i][0],particle_tracks[i][1],particle_tracks[i][2])
 
+#plot a comparison of profiles
+ideal_profile_data=np.histogram(initial_positions[:,0],bins=40, range=(-120,120))
+ideal_profile=ideal_profile_data[0]/np.sum(ideal_profile_data[0])
+profile_data=np.histogram(detected_particles[:,0],bins=40, range=(-120,120))
+channeltron_positions=profile_data[1]-3
+channeltron_positions=np.delete(channeltron_positions,0)
+detected_profile=profile_data[0]/np.sum(profile_data[0])
+
+#interpolate the profiles with 1000 points to make analysis more accurate (e.g. 95% width calculation)
+interpolated_channeltron_positions=np.linspace(-120,120,1000)
+interpolated_ideal_profile=np.interp(interpolated_channeltron_positions,channeltron_positions,ideal_profile)
+interpolated_detected_profile=np.interp(interpolated_channeltron_positions,channeltron_positions,detected_profile)
+
+#calculate 95% widths
+ideal_95w=calculate_95_width(interpolated_channeltron_positions,interpolated_ideal_profile)
+detected_95w=calculate_95_width(interpolated_channeltron_positions,interpolated_detected_profile)
+plt.figure()
+plt.title("Comparison of Profiles\n (Area Under Profiles Normalised)")
+plt.xlabel('x (mm)')
+plt.ylabel('Detected Particles (arbitrary units)')
+plt.plot(interpolated_channeltron_positions, interpolated_detected_profile)
+plt.plot(interpolated_channeltron_positions, interpolated_ideal_profile,'--')
+plt.legend(['Simulated IPM\nMeasurement','Actual Beam Profile'], loc='upper right')
+plt.figtext(0.05,0.10,'Actual Beam: 95% Width = '+str("{:10.2f}".format(ideal_95w))+"mm")
+plt.figtext(0.05,0.07,'Simulated Measurement: 95% Width = '+str("{:10.2f}".format(detected_95w))+"mm")
+plt.figtext(0.05,0.04,'Electric Field Filepath: '+filepath)
+plt.subplots_adjust(bottom=0.22)
 plt.show()
+
+
 running_times['program complete']=time.time()
 running_times['TOTAL PARTICLE.MOVE TIME']=running_times['particle move finished'] #cumulative total from each function call
 running_times['TOTAL CALCULATE GAMMA TIME']=running_times['calculate gamma finished'] #cumulative total from each function call
