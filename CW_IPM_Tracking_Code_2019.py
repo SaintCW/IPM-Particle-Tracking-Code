@@ -43,9 +43,9 @@ particles=[] #an array to store all the particle objects in during tracking
 destroyed_particles=[] #an array to store particle objects that are removed from the simulation, usually because they have moved outside of the simulation region
 final_timesteps=[] #an array to view all the final timesteps calculated for particles - for use in debugging
 
-def open_file_dialogue():
+def open_file_dialogue(message='Select CST EField File'):
      root=Tk()
-     root.filename=filedialog.askopenfilename(title="Select CST EField File")
+     root.filename=filedialog.askopenfilename(title=message)
      filepath=root.filename
      root.withdraw()
      return(filepath)
@@ -501,16 +501,33 @@ print("*               ISIS IPM PARTICLE TRACKING CODE             CCW v3.0 *")
 print('**********************************************************************')
 #Import and Analyse the Electric Field From CST
 plt.close('all') #close anyt plots still open from previous runs of the code
+print("Please choose CST electric field files...\n The first file chosen should contain the IPM and particle beam, the second file should contain the IPM with no beam.\nIf only one file is needed, select the same file twice.\n**IMPORTANT - Both fields must be the same size, cover the same co-ordinates and have the same resolution.**\n-------------------------------------\n")
+filepath_withbeam=open_file_dialogue(message="Select CST EField File 1 - With Beam Inside the IPM") #let the user choose a filepath graphically
+filepath_nobeam=open_file_dialogue(message="Select CST EField File 2 - With No Beam In The Model") #ask
+if not filepath_withbeam or not filepath_nobeam: #check that both filepaths were picked (an empty string will trigger this if statement)
+     print("**************ERROR******************")
+     print("*        Filepath(s) Missing        *")
+     print("*Please specify 2 valid EField files*")
+     print("*************************************")
+     sys.exit()
 
-filepath=open_file_dialogue() #let the user choose a filepath graphically
-filepath_nobeam=open_file_dialogue() #ask
-
+select_harp=True
+if select_harp:
+     harp_filepath='C:\\Users\\vwa13369\\Desktop\\IPM_Particle_Tracking_Code\\Harp Profiles 21July2019 Shift\\EPM26A.dat'
+     harp_data=pd.read_csv(harp_filepath,header=None,nrows=8,skiprows=[0,9,10], delim_whitespace=True)
+     hor_harp_data=harp_data[0:4]
+     hor_harp_data=hor_harp_data.values.flatten()
+     ver_harp_data=harp_data[4:8]
+     ver_harp_data=ver_harp_data.values.flatten()
+     
+     
+     
 #filepath='C:\\Users\\vwa13369\\Desktop\\AccPhys 2016\\2019_Field_Maps\\-15kV_-1400VBias_2_27e13ppp_radx_54_9_rady_41_5_xoff_0_86_yoff_-2_9_CFOFF.txt'
 running_times={'start time':time.time(),'field boundary check start':0,'field boundary check finish':0,'calculate gamma start':0,'calculate gamma finished':0,'particle move start':0,'particle move finished':0} #Log the time to calculate the execution time of the code
 
 
 #IMPORT EFIELD, ANALYSE AND CONVERT TO NUMPY----------------------------------------------------------------------------------------------------------------------
-efield=import_CST_EField(filepath,nrows=None, model_horizontal_axis='z',model_vertical_axis='y',model_longitudinal_axis='x')
+efield=import_CST_EField(filepath_withbeam,nrows=None, model_horizontal_axis='z',model_vertical_axis='y',model_longitudinal_axis='x')
 #analyse the field map to obtain properties needed for data lookup in the field
 nrows,step_size,x_size,y_size,z_size,min_x,max_x,min_y,max_y,min_z,max_z=analyse_field_map(efield,printout=True)
 #calculate field boundaries - doing this here speeds up the runtime of functions that use these values in if statements
@@ -557,11 +574,15 @@ if store_trajectories:
 
 #------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 #GENERATE PARTICLE DISTIBUTION
-beam_xrad=54.9
-beam_yrad=41.5
-beam_xpos=0.86
-beam_ypos=-2.9
-beam_length_mm=1000
+beam_xrad=25
+beam_yrad=26#26
+beam_xpos=1
+beam_ypos=6
+beam_length_mm=500
+
+#if disctribution is not specified, a uniform distribution will be generated
+#beam_distribution='gaussian' 
+beam_distribution='uniform'
 
 detector_z_centre=detector_zmin+((detector_zmax-detector_zmin)/2)
 beam_zmin=detector_z_centre-(beam_length_mm/2)
@@ -572,33 +593,79 @@ if beam_zmax > tracking_zmax: beam_zmax=tracking_zmax
 if beam_zmin < tracking_zmin: beam_zmin=tracking_zmin
 
 print('-----------------------------------------------------------------')
+
+#GENERATE PARTICLE DISTRIBUTION------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 print("Generating beam between: z_min="+str(beam_zmin)+"mm, and beam z_max="+str(beam_zmax)+"mm.")
 print("\Beam Properties:\n - No. Bunches = "+str(number_of_bunches)+"\n - Bunch length = "+str(bunch_length*1e9)+"ns\n - Inter-bunch spacing = "+str(bunch_spacing*1e9)+"ns \n Generating...\n")
 running_times['start of beam generation']=time.time()
 particle_counter=1
+particlers=[]
+particlethetas=[]
 for j in range(0,number_of_bunches):
      # to calculate bunch start time, in seconds in the loop below, use: bunch_start_time=(j*(bunch_spacing+bunch_length))*1e9
      for i in range(0,int(np.round(particle_num/number_of_bunches))):
           #create a particle. --> Calculate the x and y positions as random numbers generated inside gaussian (normal) distributions for each axis. The distribution mean (loc) values are set to the beam offset positions, and the standard deviations (scale) are set to half of the beam width in CST (so that the 95% widths correspond to 2 signma, which is correct for a gaussian). Size is the number of points that the function generates
           particle_creation_time=((j*(bunch_spacing+bunch_length)*1e9)+np.random.randint(low=0,high=(bunch_length*1e9)+1))/1e9 #pick a random creation time in seconds (but in integer values of ns) for each particle that fits inside the bunch length
-          particle_x=(np.random.normal(loc=beam_xpos,scale=0.5*beam_xrad,size=1)[0])
-          particle_y=(np.random.normal(loc=beam_ypos,scale=0.5*beam_yrad,size=1)[0])
+          if beam_distribution=='gaussian':
+               particle_r=(abs((np.random.normal(loc=0,scale=0.5,size=None)))**0.5)*beam_xrad
+               particle_theta=(np.random.rand()*360)
+               particlers.append(particle_r)
+               particle_x=(particle_r*math.cos(math.radians(particle_theta)))+beam_xpos
+               particle_y=(particle_r*math.sin(math.radians(particle_theta))*beam_yrad/beam_xrad)+beam_ypos
+#               particle_x=(np.random.normal(loc=beam_xpos,scale=0.5*beam_xrad,size=1)[0])
+#               particle_y=(np.random.normal(loc=beam_ypos,scale=0.5*beam_yrad,size=1)[0])
+          elif beam_distribution=='beta':
+               print("\n\n***********\n\nBETA DISTRIBUTION NOT WORKING PROPERLY YET...LOOKS MORE LIKE A DONUT!!\n\n*********************")
+               alpha=1.7
+               beta=1.7
+               #generate random magnitudes and angles in polar co-ordinate values using the x radius, this will be converted into a circular beam with a beta distribution, then stretched along the y axis to complete the beam generation
+               particle_r=((np.random.beta(alpha,beta))**0.5)*beam_xrad #generate a random magnitude using the beta distribution. The random number needs to be square rooted to ensure that distribution is not weighted too much towards the inside of the beam when the polar co-ordinates are converted back into cartesian co-ordinates (for explanation see:http://www.anderswallin.net/2009/05/uniform-random-points-in-a-circle-using-polar-coordinates/)
+               #WEDNESDAY 31st JULY
+               #need to calculate the "inverse of the cumulative distribution for the beta function...for a uniform distribution it is just sqrt(r)
+               particlers.append(particle_r)
+               particle_theta=(np.random.rand()*360) #generate a random angle between 0-369
+               #convert from polar to cartesian co-ordinates
+               particle_x=particle_r*math.cos(math.radians(particle_theta))+beam_xpos #convert degrees value into radians, so that the math.cos function works
+               particle_y=(particle_r*math.sin(math.radians(particle_theta))*beam_yrad/beam_xrad)+beam_ypos
+               #the beam now has a beta distribution but is circular, with radius = x_rad
+               #scale all the y-co-ordinates by y_rad/x_rad to generate the final beam shape
+               particle_y=particle_y*beam_yrad/beam_xrad
+          else: #generate a uniform beam by default (follows same procedure as above, but without the comments. Polar distribution generated then converted to cartesian, to prevent the distribution shape being a square)
+               beam_distribution='uniform'
+               particle_r=((np.random.rand()**0.5)*beam_xrad)
+               particle_theta=(np.random.rand()*360)
+               particlers.append(particle_r)
+               particlethetas.append(particle_theta)
+               particle_x=(particle_r*math.cos(math.radians(particle_theta))+beam_xpos)
+               particle_y=((particle_r*math.sin(math.radians(particle_theta))*beam_yrad/beam_xrad)+beam_ypos)
           particle_z=np.random.uniform(low=beam_zmin,high=beam_zmax)
           Particle(x=particle_x,y=particle_y,z=particle_z,creation_time=particle_creation_time, species='proton',ID=particle_counter-1)
           particle_counter=particle_counter+1
-print("Particle beam generated, containing "+str(len(particles))+" particles.")
+print("Particle beam generated, using a "+beam_distribution+" probability distribution, containing "+str(len(particles))+" particles.")
 particles=np.array(particles)
 print("Particle list converted to numpy array for faster tracking.")
-running_times['finished beam generation']=time.time()
+xpositions=[]
+ypositions=[]
+for particle in particles:
+    xpositions.append(particle.x)
+    ypositions.append(particle.y)
+plt.figure()
+plt.scatter(xpositions,ypositions)
+plt.figure()
+plt.hist(xpositions,bins=100)
+plt.show()
 
+running_times['finished beam generation']=time.time()
+#%%
 #------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 #TRACK PARTICLES THROUGH ELECTRIC FIELD
+
 simulation_time=0
 #calculate field transition times from bunch structure
 #caution, only works for timesteps that are picosecond or larger
 transition_times=[]
 print("\n Calculating field transition times frombunch structure...")
-#calculate field transition times and save them...values will be SAVED IN NANOSECONDS to reduce the danger of floating point erithmetic errors
+#calculate field transition times and save them...values will be SAVED IN NANOSECONDS to reduce the danger of floating point arithmetic errors
 for bunch_num in range(0,number_of_bunches):
      if bunch_num==0: 
           transition_times.append(bunch_length*1e9)
@@ -622,6 +689,7 @@ for time_value in transition_times:
           sys.exit()
 transition_times.append(np.round(tracking_steps*input_timestep*1e9,decimals=6)+1)#append a final value to the transition times that will never be reached, to prevent indexing errors in the code later on
 
+#PARTICLE TRACKING------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 running_times['start tracking']=time.time()
 print("Tracking "+str(particle_num)+" particles through "+str(tracking_steps)+" timesteps.\nPlease wait...")
 print("0 ns tracked.",end=""  ) #end="" stops the output moving to a new line after printing this message (used to create a tidy progress readout in the output console)
@@ -636,17 +704,18 @@ for i in range (0,tracking_steps):
     #print("Simulation Time = "+str(simulation_time))
     print("\r"+str(i+1)+" ns tracked. There are "+str(count)+" particles being tracked.", end="")#re-write to the console with an updated progress message. "\r" prints from the start of the current line on the console, to overwrite the previous time printout
     if (np.round(simulation_time*1e9,decimals=6)==transition_times[transition_count]):
-         print("\n*****NEED TO SWAP EFIELD!*****\n")
          transition_count=transition_count+1
+         del efield, numpy_efield #delete the existing electric fields stored in memory to reduce overall memory usage
+         if transition_count%2==1: #if the transition count is odd, a bunch is leaving the monitor (simulation always begins with a bunch in the monitor)
+              filepath=filepath_withbeam
+              print("\nThe particle bunch is leaving the monitor - changing E_Field...\n")
+         else:
+              filepath=filepath_nobeam
+              print("\nA particle bunch is entering the monitor - changing E_Field...\n")
+         efield=import_CST_EField(filepath,nrows=None, model_horizontal_axis='z',model_vertical_axis='y',model_longitudinal_axis='x')
+         numpy_efield=efield[['Ex','Ey','Ez']].to_numpy()         
 print("\nThere are "+str(len(particles))+" particles remaining in the simulation region.")
 running_times['finished tracking']=time.time()
-
-
-
-
-
-
-
 
 #------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 #ANALYSE RESULTS####################################################################################################################
@@ -802,10 +871,11 @@ if np.size(detected_particles) > 0:
 #set the layout up so there is space for information text below the plots
 plt.tight_layout()
 plt.subplots_adjust(bottom=0.15)
-plt.figtext(0.05,0.08,'Simulation Details',weight='bold')
-plt.figtext(0.05,0.06,'Electric Field Information: Imported Step Size = '+str(step_size)+' mm, X Max = '+str(max_x)+' mm, X Min = '+str(min_x)+", Y Max = "+str(max_y)+' mm, Y Min = '+str(min_y)+', Z Max = '+str(max_z)+' mm, Z Min = '+str(min_z)+'mm')
-plt.figtext(0.05,0.04,'Type of particles tracked = '+particle.species+"s")
-plt.figtext(0.05,0.02,'Electric Field Filepath: '+filepath)
+plt.figtext(0.05,0.09,'Simulation Details',weight='bold')
+plt.figtext(0.05,0.07,'Electric Field Information: Imported Step Size = '+str(step_size)+' mm, X Max = '+str(max_x)+' mm, X Min = '+str(min_x)+", Y Max = "+str(max_y)+' mm, Y Min = '+str(min_y)+', Z Max = '+str(max_z)+' mm, Z Min = '+str(min_z)+'mm')
+plt.figtext(0.05,0.05,'Type of particles tracked = '+particle.species+"s")
+plt.figtext(0.05,0.03,'Electric Field Filepath 1: '+filepath_withbeam)
+plt.figtext(0.05,0.01,'Electric Field Filepath 2: '+filepath_nobeam)
 
 #plot particle trajectories
 #
@@ -843,10 +913,12 @@ plt.ylabel('Detected Particles (arbitrary units)')
 plt.plot(interpolated_channeltron_positions, interpolated_detected_profile)
 plt.plot(interpolated_channeltron_positions, interpolated_ideal_profile,'--')
 plt.legend(['Simulated IPM\nMeasurement','Actual Beam Profile'], loc='upper right')
+plt.figtext(0.05,0.13,'Electric Field Information: Imported Step Size = '+str(step_size)+' mm, X Max = '+str(max_x)+' mm, X Min = '+str(min_x)+", Y Max = "+str(max_y)+' mm, Y Min = '+str(min_y)+', Z Max = '+str(max_z)+' mm, Z Min = '+str(min_z)+'mm')
 plt.figtext(0.05,0.10,'Actual Beam: 95% Width = '+str("{:10.2f}".format(ideal_95w))+"mm")
 plt.figtext(0.05,0.07,'Simulated Measurement: 95% Width = '+str("{:10.2f}".format(detected_95w))+"mm")
-plt.figtext(0.05,0.04,'Electric Field Filepath: '+filepath)
-plt.subplots_adjust(bottom=0.22)
+plt.figtext(0.05,0.04,'Electric Field 1 Filepath: '+filepath_withbeam)
+plt.figtext(0.05,0.01,'Electric Field 2 Filepath: '+filepath_nobeam)
+plt.subplots_adjust(bottom=0.27)
 plt.show()
 
 
