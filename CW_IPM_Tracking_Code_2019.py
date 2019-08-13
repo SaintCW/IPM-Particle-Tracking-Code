@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 from mpl_toolkits import mplot3d
 import scipy as sp
 from scipy import constants
+from scipy.signal import find_peaks
 import math
 from tkinter import filedialog
 from tkinter import *
@@ -42,6 +43,47 @@ c = sp.constants.c
 particles=[] #an array to store all the particle objects in during tracking
 destroyed_particles=[] #an array to store particle objects that are removed from the simulation, usually because they have moved outside of the simulation region
 final_timesteps=[] #an array to view all the final timesteps calculated for particles - for use in debugging
+
+def get_fast_amplifier_profile(sample_rate=(1/60e6)):
+     '''
+     Reads MCPM and SCPM Data taken using Fast Amplifiers in the EPB1 Ionisation profile monitor, and returns three items:
+          1) Raw data from each channeltron
+          2) Integrated signal from each channeltron
+          3) The specified filepath of the channeltron data
+     '''
+     #MAIN PROGRAM
+     #Import and Analyse the Electric Field From CST
+     print("Please choose a fast amplifier data file from the IPM.\nThe data should be stored in a .csv file.\n")
+     filepath=open_file_dialogue(message="Select Fast Amplifier .csv file") #let the user choose a filepath graphically
+     rawdata=pd.read_csv(filepath,skiprows=[0,1])
+     print(rawdata.head())
+     ctron_array=rawdata.to_numpy()
+     no_samples=ctron_array.shape[0]
+     no_ctrons=ctron_array.shape[1]
+     total_time=no_samples*sample_rate
+     total_time_us=total_time*1e6 #convert to microseconds to make it more readable
+     print("The time interval contained in the fast amplifier data is: "+str(total_time_us)+"us.")
+     integrated_data=[]
+     for i in range(1,no_ctrons):
+          #go through each channeltron and integrate the profile signal
+          tempdata=ctron_array[:,i] #on each iteration of the loop, this contains the signals measured ver time by a single channeltron
+          integrated_data.append(np.sum(tempdata))
+     #temporary finish
+     data=ctron_array
+     print(integrated_data)
+     return(data,integrated_data,filepath)
+     
+     
+def read_harp_data(filepath,no_wires=24, wire_spacing_mm=6):
+     filepath='C:\\Users\\vwa13369\\Desktop\\IPM_Particle_Tracking_Code\\Harp Profiles 21July2019 Shift\\EPM26A2.dat'
+     rawdata=pd.read_csv(filepath,header=None,skiprows=[0,9,10,11],delim_whitespace=True)
+     hor_harp=rawdata[0:4]
+     ver_harp=rawdata[4:9]
+     hor_profile=hor_harp.values.flatten()
+     ver_profile=ver_harp.values.flatten()
+     harp_limit=(((no_wires*wire_spacing_mm)/2)-(wire_spacing_mm/2))
+     harp_spacing=np.linspace(-harp_limit,harp_limit,num=no_wires)
+     return(hor_profile,ver_profile,harp_spacing)
 
 def open_file_dialogue(message='Select CST EField File'):
      root=Tk()
@@ -236,16 +278,8 @@ class Particle:
           Ez=numpy_efield[int(field_row_number)][2]
           
           #Move the particle through one timestep calculating new positions and velocities using the Lorentz force applied by the EField at the particle's location
-          #calculate new positions after one timestep
-#          self.x=self.previous_x+(self.previous_vx*timestep)+(((self.charge*timestep*timestep*Ex)/(2*relativistic_mass))*1e6)
-#          self.y=self.previous_y+(self.previous_vy*timestep)+(((self.charge*timestep*timestep*Ey)/(2*relativistic_mass))*1e6)
-#          self.z=self.previous_z+(self.previous_vz*timestep)+(((self.charge*timestep*timestep*Ez)/(2*relativistic_mass))*1e6)
-         
-          
-          #calculate new velocities after timestep
-#          self.vx=self.previous_vx+(((self.charge*timestep*Ex)/(relativistic_mass))*1e6)
-#          self.vy=self.previous_vy+(((self.charge*timestep*Ey)/(relativistic_mass))*1e6)
-#          self.vz=self.previous_vz+(((self.charge*timestep*Ez)/(relativistic_mass))*1e6)
+          #calculate new positions and new velocities after timestep
+
 
           #calculation called in a seperate, purely mathmatical function, optimised with the jit compiler to improve code speed.
           self.x,self.vx=calculate_new_position_and_velocity(self.previous_x,self.previous_vx,timestep,self.charge,relativistic_mass,Ex)
@@ -413,10 +447,15 @@ def calculate_gamma(self):
      return(relativistic_gamma)
 
 def normalise_list(data):
-     '''Takes a python list as an input, converts it to a numpy array and normalises it'''
+     '''Takes a python list as an input, converts it to a numpy array and scales it so that it's maximum value is 1'''
      data=np.asarray(data)
      data=data/data.max()
      return(data)
+     
+def normalise_profile_area(data):
+     '''Takes a beam profile and normalises the area under the curve to 1 '''
+     normalised_profile=data/np.sum(data)
+     return(normalised_profile)
 
 def check_field_boundaries(x,y,z,field_data):
      #REMOVED TO SPEED UP CODE - rely on values calculated when analyse field was last called in the main code -->
@@ -469,15 +508,19 @@ def calculate_row_number(x,y,z):
      return(element_num)
 
 
-def calculate_95_width(profile_x,profile_y):
-     '''Returns the 95% width of the input profile.The output width will have the same dimensions as the input profile_x array
+def analyse_profile(profile_x,profile_y,min_peak_height=0):
+     '''Returns the 95% width of the input profile and the location of the peak.
      
-     E.G. For a horizontal profile measurement at ISIS, profile_x should contain the positions of the centre of each channeltron, and 
+     If multiple peaks are detected in the profile (e.g. due to noise), increase the peak threshold value to remove these.
+     
+     The position and width values and dimensions are calculated from the input profile_x array (see example below)
+     
+     E.G. For a horizontal profile measurement with an ISIS IPM, profile_x should contain the positions of the centre of each channeltron, and 
      profile_y should contain the measured beam profile, i.e. the particles measured by each channeltron.'''
      spacing=profile_x[1]-profile_x[0]
      lower_boundary=np.sum(profile_y)*0.025
      upper_boundary=np.sum(profile_y)*0.975
-     cumsum=0
+     cumsum=0 #cumulative sum
      i=0
      for data in profile_y:
           cumsum=cumsum+data
@@ -492,7 +535,17 @@ def calculate_95_width(profile_x,profile_y):
           i=i-1
      upper_location=i*spacing
      width95=upper_location-lower_location
-     return(width95)
+     
+     #find profile centre
+     midpoint=np.sum(profile_y)*0.5
+     i=0
+     cumsum=0
+     for data in profile_y:
+          cumsum=cumsum+data
+          if cumsum >= midpoint: break
+          i=i+1
+     centre_position=np.min(profile_x)+(i*spacing) #returns the centre position of the profile peak
+     return(width95,centre_position)
 
 #######################################################################################################################################################################
 #MAIN PROGRAM
@@ -513,14 +566,21 @@ if not filepath_withbeam or not filepath_nobeam: #check that both filepaths were
 
 select_harp=True
 if select_harp:
-     harp_filepath='C:\\Users\\vwa13369\\Desktop\\IPM_Particle_Tracking_Code\\Harp Profiles 21July2019 Shift\\EPM26A.dat'
-     harp_data=pd.read_csv(harp_filepath,header=None,nrows=8,skiprows=[0,9,10], delim_whitespace=True)
-     hor_harp_data=harp_data[0:4]
-     hor_harp_data=hor_harp_data.values.flatten()
-     ver_harp_data=harp_data[4:8]
-     ver_harp_data=ver_harp_data.values.flatten()
-     
-     
+     harp_filepath='C:\\Users\\vwa13369\\Desktop\\IPM_Particle_Tracking_Code\\Harp Profiles 21July2019 Shift\\EPM26A2.dat'     
+     if harp_filepath==None: 
+          select_harp=False
+          print('No harp monitor data loaded')
+     else:
+          hor_harp,ver_harp,harp_wire_positions=read_harp_data(harp_filepath)
+          #interpolate the data to accurately calculate widths and centre positions
+          interpolated_harp_wire_positions=np.linspace(-69,69,1000)
+          interpolated_hor_harp_profile=np.interp(interpolated_harp_wire_positions,harp_wire_positions,hor_harp)
+          interpolated_ver_harp_profile=np.interp(interpolated_harp_wire_positions,harp_wire_positions,ver_harp)
+          #analyse the profiles for 95% widths and centre positions in each plane
+          hor_harp_width,hor_harp_centre=analyse_profile(interpolated_harp_wire_positions,interpolated_hor_harp_profile)
+          ver_harp_width,ver_harp_centre=analyse_profile(interpolated_harp_wire_positions,interpolated_ver_harp_profile)
+          print('Harp profile loaded from: '+harp_filepath)
+          print('Beam X Centre = '+str(hor_harp_centre)+'mm, Beam Y Centre = '+str(ver_harp_centre)+'mm, \nHorizontal 95% Width = '+str(hor_harp_width)+'mm, Vertical 95% Width = '+str(ver_harp_width)+'mm\n\n')
      
 #filepath='C:\\Users\\vwa13369\\Desktop\\AccPhys 2016\\2019_Field_Maps\\-15kV_-1400VBias_2_27e13ppp_radx_54_9_rady_41_5_xoff_0_86_yoff_-2_9_CFOFF.txt'
 running_times={'start time':time.time(),'field boundary check start':0,'field boundary check finish':0,'calculate gamma start':0,'calculate gamma finished':0,'particle move start':0,'particle move finished':0} #Log the time to calculate the execution time of the code
@@ -556,7 +616,7 @@ print("Electric field values loaded into seperate numpy array for fast access.")
 #--------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 #generate an ion distribution
-particle_num=5000 #the number of particles that should be generated inside the monitor
+particle_num=50000 #the number of particles that should be generated inside the monitor
 tracking_steps=2000
 input_timestep=1e-9
 bunch_length=100e-9
@@ -574,15 +634,22 @@ if store_trajectories:
 
 #------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 #GENERATE PARTICLE DISTIBUTION
-beam_xrad=25
-beam_yrad=26#26
+beam_xrad=25/0.95 #/0.95 to scale the radius up from a 95% width to a 100% width
+beam_yrad=26/0.95
 beam_xpos=1
 beam_ypos=6
 beam_length_mm=500
 
+#if harp data has been chosen, match the beam properties to the harp data
+if select_harp==True:
+     beam_xrad=(hor_harp_width/2)/0.95
+     beam_yrad=(ver_harp_width/2)/0.95
+     beam_xpos=hor_harp_centre
+     beam_ypos=ver_harp_centre
+
 #if disctribution is not specified, a uniform distribution will be generated
 #beam_distribution='gaussian' 
-beam_distribution='uniform'
+beam_distribution='beta'
 
 detector_z_centre=detector_zmin+((detector_zmax-detector_zmin)/2)
 beam_zmin=detector_z_centre-(beam_length_mm/2)
@@ -616,10 +683,10 @@ for j in range(0,number_of_bunches):
 #               particle_y=(np.random.normal(loc=beam_ypos,scale=0.5*beam_yrad,size=1)[0])
           elif beam_distribution=='beta':
                print("\n\n***********\n\nBETA DISTRIBUTION NOT WORKING PROPERLY YET...LOOKS MORE LIKE A DONUT!!\n\n*********************")
-               alpha=1.7
-               beta=1.7
+               alpha=1
+               beta=1
                #generate random magnitudes and angles in polar co-ordinate values using the x radius, this will be converted into a circular beam with a beta distribution, then stretched along the y axis to complete the beam generation
-               particle_r=((np.random.beta(alpha,beta))**0.5)*beam_xrad #generate a random magnitude using the beta distribution. The random number needs to be square rooted to ensure that distribution is not weighted too much towards the inside of the beam when the polar co-ordinates are converted back into cartesian co-ordinates (for explanation see:http://www.anderswallin.net/2009/05/uniform-random-points-in-a-circle-using-polar-coordinates/)
+               particle_r=((abs((np.random.beta(alpha,beta))-0.5)*2)**0.5)*beam_xrad #generate a random magnitude using the beta distribution. The random number needs to be square rooted to ensure that distribution is not weighted too much towards the inside of the beam when the polar co-ordinates are converted back into cartesian co-ordinates (for explanation see:http://www.anderswallin.net/2009/05/uniform-random-points-in-a-circle-using-polar-coordinates/)
                #WEDNESDAY 31st JULY
                #need to calculate the "inverse of the cumulative distribution for the beta function...for a uniform distribution it is just sqrt(r)
                particlers.append(particle_r)
@@ -644,16 +711,16 @@ for j in range(0,number_of_bunches):
 print("Particle beam generated, using a "+beam_distribution+" probability distribution, containing "+str(len(particles))+" particles.")
 particles=np.array(particles)
 print("Particle list converted to numpy array for faster tracking.")
-xpositions=[]
-ypositions=[]
-for particle in particles:
-    xpositions.append(particle.x)
-    ypositions.append(particle.y)
-plt.figure()
-plt.scatter(xpositions,ypositions)
-plt.figure()
-plt.hist(xpositions,bins=100)
-plt.show()
+#xpositions=[]
+#ypositions=[]
+#for particle in particles:
+#    xpositions.append(particle.x)
+#    ypositions.append(particle.y)
+#plt.figure()
+#plt.scatter(xpositions,ypositions)
+#plt.figure()
+#plt.hist(xpositions,bins=100)
+#plt.show()
 
 running_times['finished beam generation']=time.time()
 #%%
@@ -890,34 +957,59 @@ plt.figtext(0.05,0.01,'Electric Field Filepath 2: '+filepath_nobeam)
 #          ax.plot3D(particle_tracks[i][2],particle_tracks[i][0],particle_tracks[i][1])
      #plt.plot(particle_tracks[i][0],particle_tracks[i][1],particle_tracks[i][2])
 
+
+#---------------------------------------------------------------------------------------------------------------------------------
+#Get a profile measured using the fast amplifiers on the ISIS EPB MCPM
+temp,MCPM_integrated_profile,mcpm_filepath=get_fast_amplifier_profile() #integrated data: index 0 contains single channel data, which should be ignored. Indexes 1-40 contain MCPM data
+#---------------------------------------------------------------------------------------------------------------------------------
 #plot a comparison of profiles
+#generate histograms, each containing 2 arrays. Arrays at [0] contains profile data, arrays at [1] contain the position of each profile data point (e.g. channeltron position, harp wire position)
 ideal_profile_data=np.histogram(initial_positions[:,0],bins=40, range=(-120,120))
-ideal_profile=ideal_profile_data[0]/np.sum(ideal_profile_data[0])
+ideal_profile=normalise_profile_area(ideal_profile_data[0])
 profile_data=np.histogram(detected_particles[:,0],bins=40, range=(-120,120))
 channeltron_positions=profile_data[1]-3
 channeltron_positions=np.delete(channeltron_positions,0)
-detected_profile=profile_data[0]/np.sum(profile_data[0])
+detected_profile=normalise_profile_area(profile_data[0])
+#do the same for the machine physics data
+MCPM_integrated_profile_data=np.histogram(MCPM_integrated_profile[1:41],bins=40,range=(-120,120))
+MCPM_profile=normalise_profile_area(MCPM_integrated_profile_data[0])
+
 
 #interpolate the profiles with 1000 points to make analysis more accurate (e.g. 95% width calculation)
 interpolated_channeltron_positions=np.linspace(-120,120,1000)
 interpolated_ideal_profile=np.interp(interpolated_channeltron_positions,channeltron_positions,ideal_profile)
 interpolated_detected_profile=np.interp(interpolated_channeltron_positions,channeltron_positions,detected_profile)
+interpolated_MCPM_profile=np.interp(interpolated_channeltron_positions,channeltron_positions,MCPM_profile)
+#normalise the harp profile and create and interpolated version for plotting comparisons
+hor_harp=normalise_profile_area(hor_harp)
+interpolated_harp_wire_positions=np.linspace(-69,69,1000)
+interpolated_hor_harp_profile=np.interp(interpolated_harp_wire_positions,harp_wire_positions,hor_harp)
 
-#calculate 95% widths
-ideal_95w=calculate_95_width(interpolated_channeltron_positions,interpolated_ideal_profile)
-detected_95w=calculate_95_width(interpolated_channeltron_positions,interpolated_detected_profile)
+#calculate 95% widths and peak centres
+ideal_95w,ideal_centre=analyse_profile(interpolated_channeltron_positions,interpolated_ideal_profile)
+detected_95w,detected_centre=analyse_profile(interpolated_channeltron_positions,interpolated_detected_profile)
+harp_95w,harp_centre=analyse_profile(interpolated_harp_wire_positions,interpolated_hor_harp_profile)
+MCPM_95w,MCPM_centre=analyse_profile(interpolated_channeltron_positions,interpolated_MCPM_profile)
+
+
+
 plt.figure()
 plt.title("Comparison of Profiles\n (Area Under Profiles Normalised)")
 plt.xlabel('x (mm)')
 plt.ylabel('Detected Particles (arbitrary units)')
 plt.plot(interpolated_channeltron_positions, interpolated_detected_profile)
+plt.plot(interpolated_harp_wire_positions, interpolated_hor_harp_profile,'--',color='red')
 plt.plot(interpolated_channeltron_positions, interpolated_ideal_profile,'--')
-plt.legend(['Simulated IPM\nMeasurement','Actual Beam Profile'], loc='upper right')
-plt.figtext(0.05,0.13,'Electric Field Information: Imported Step Size = '+str(step_size)+' mm, X Max = '+str(max_x)+' mm, X Min = '+str(min_x)+", Y Max = "+str(max_y)+' mm, Y Min = '+str(min_y)+', Z Max = '+str(max_z)+' mm, Z Min = '+str(min_z)+'mm')
-plt.figtext(0.05,0.10,'Actual Beam: 95% Width = '+str("{:10.2f}".format(ideal_95w))+"mm")
-plt.figtext(0.05,0.07,'Simulated Measurement: 95% Width = '+str("{:10.2f}".format(detected_95w))+"mm")
-plt.figtext(0.05,0.04,'Electric Field 1 Filepath: '+filepath_withbeam)
-plt.figtext(0.05,0.01,'Electric Field 2 Filepath: '+filepath_nobeam)
+plt.plot(interpolated_channeltron_positions, interpolated_MCPM_profile)
+plt.legend(['Simulated IPM\nMeasurement','EPM 26A Harp \nMonitor Profile','Generated Beam\nDistribution\nIn Simulation','Measured Profile\nwith EPB1 MCPM'], loc='upper right')
+plt.figtext(0.05,0.16,'Electric Field Information: Imported Step Size = '+str(step_size)+' mm, X Max = '+str(max_x)+' mm, X Min = '+str(min_x)+", Y Max = "+str(max_y)+' mm, Y Min = '+str(min_y)+', Z Max = '+str(max_z)+' mm, Z Min = '+str(min_z)+'mm')
+plt.figtext(0.05,0.14,'Actual Beam: 95% Width = '+str("{:10.2f}".format(ideal_95w))+"mm")
+plt.figtext(0.05,0.12,'Simulated Measurement: 95% Width = '+str("{:10.2f}".format(detected_95w))+"mm")
+plt.figtext(0.05,0.10,'Harp Beam: 95% Width = '+str("{:10.2f}".format(harp_95w))+"mm")
+plt.figtext(0.05,0.08,'MCPM Beam: 95% Width = '+str("{:10.2f}".format(MCPM_95w))+"mm")
+plt.figtext(0.05,0.06,'Electric Field 1 Filepath: '+filepath_withbeam)
+plt.figtext(0.05,0.04,'Electric Field 2 Filepath: '+filepath_nobeam)
+plt.figtext(0.05,0.02,'MCPM Data Filepath: '+mcpm_filepath)
 plt.subplots_adjust(bottom=0.27)
 plt.show()
 
