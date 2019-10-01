@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 from mpl_toolkits import mplot3d
 import scipy as sp
 from scipy import constants
+from scipy.signal import find_peaks
 import math
 from tkinter import filedialog
 from tkinter import *
@@ -42,6 +43,49 @@ c = sp.constants.c
 particles=[] #an array to store all the particle objects in during tracking
 destroyed_particles=[] #an array to store particle objects that are removed from the simulation, usually because they have moved outside of the simulation region
 final_timesteps=[] #an array to view all the final timesteps calculated for particles - for use in debugging
+
+def get_fast_amplifier_profile(filepath=None, sample_rate=(1/60e6)):
+     '''
+     Reads MCPM and SCPM Data taken using Fast Amplifiers in the EPB1 Ionisation profile monitor, and returns three items:
+          1) Raw data from each channeltron
+          2) Integrated signal from each channeltron
+          3) The specified filepath of the channeltron data
+     '''
+     #MAIN PROGRAM
+     #Import and Analyse the Electric Field From CST
+     if filepath == None:
+          print("Please choose a fast amplifier data file from the IPM.\nThe data should be stored in a .csv file.\n")
+          filepath=open_file_dialogue(message="Select Fast Amplifier .csv file") #let the user choose a filepath graphically
+     else: filepath=filepath
+     rawdata=pd.read_csv(filepath,skiprows=[0,1])
+     print(rawdata.head())
+     ctron_array=rawdata.to_numpy()
+     no_samples=ctron_array.shape[0]
+     no_ctrons=ctron_array.shape[1]
+     total_time=no_samples*sample_rate
+     total_time_us=total_time*1e6 #convert to microseconds to make it more readable
+     print("The time interval contained in the fast amplifier data is: "+str(total_time_us)+"us.")
+     integrated_data=[]
+     for i in range(1,no_ctrons):
+          #go through each channeltron and integrate the profile signal
+          tempdata=ctron_array[:,i] #on each iteration of the loop, this contains the signals measured ver time by a single channeltron
+          integrated_data.append(np.sum(tempdata))
+     #temporary finish
+     data=ctron_array
+     print(integrated_data)
+     return(data,integrated_data,filepath)
+     
+     
+def read_harp_data(filepath,no_wires=24, wire_spacing_mm=6):
+     filepath='C:\\Users\\vwa13369\\Desktop\\IPM_Particle_Tracking_Code\\Harp Profiles 21July2019 Shift\\EPM26A2.dat'
+     rawdata=pd.read_csv(filepath,header=None,skiprows=[0,9,10,11],delim_whitespace=True)
+     hor_harp=rawdata[0:4]
+     ver_harp=rawdata[4:9]
+     hor_profile=hor_harp.values.flatten()
+     ver_profile=ver_harp.values.flatten()
+     harp_limit=(((no_wires*wire_spacing_mm)/2)-(wire_spacing_mm/2))
+     harp_spacing=np.linspace(-harp_limit,harp_limit,num=no_wires)
+     return(hor_profile,ver_profile,harp_spacing)
 
 def open_file_dialogue(message='Select CST EField File'):
      root=Tk()
@@ -194,6 +238,27 @@ class Particle:
           elif species=='positron':
                self.mass=9.10928e-31
                self.charge=1.60217662e-19
+          elif species=='oxygen':
+               self.mass=1.6726219e-27*16
+               self.charge=1.60217662e-19
+          elif species=='N2':
+               self.mass=1.6726219e-27*28
+               self.charge=1.60217662e-19
+          elif species=='N+':
+               self.mass=1.6726219e-27*14
+               self.charge=1.60217662e-19
+          elif species=='H20+':
+               self.mass=1.6726219e-27*18
+               self.charge=1.60217662e-19
+          elif species=='OH+':
+               self.mass=1.6726219e-27*17
+               self.charge=1.60217662e-19
+          elif species=='H2':
+               self.mass=1.6726219e-27*2
+               self.charge=1.60217662e-19
+          elif species=='CO':
+               self.mass=1.6726219e-27*32
+               self.charge=1.60217662e-19
           elif species=='test': #create an ultra-light test particle to test tracking relativity calculations
                self.mass=9e-32
                self.charge=-1.60217662e-19
@@ -236,16 +301,8 @@ class Particle:
           Ez=numpy_efield[int(field_row_number)][2]
           
           #Move the particle through one timestep calculating new positions and velocities using the Lorentz force applied by the EField at the particle's location
-          #calculate new positions after one timestep
-#          self.x=self.previous_x+(self.previous_vx*timestep)+(((self.charge*timestep*timestep*Ex)/(2*relativistic_mass))*1e6)
-#          self.y=self.previous_y+(self.previous_vy*timestep)+(((self.charge*timestep*timestep*Ey)/(2*relativistic_mass))*1e6)
-#          self.z=self.previous_z+(self.previous_vz*timestep)+(((self.charge*timestep*timestep*Ez)/(2*relativistic_mass))*1e6)
-         
-          
-          #calculate new velocities after timestep
-#          self.vx=self.previous_vx+(((self.charge*timestep*Ex)/(relativistic_mass))*1e6)
-#          self.vy=self.previous_vy+(((self.charge*timestep*Ey)/(relativistic_mass))*1e6)
-#          self.vz=self.previous_vz+(((self.charge*timestep*Ez)/(relativistic_mass))*1e6)
+          #calculate new positions and new velocities after timestep
+
 
           #calculation called in a seperate, purely mathmatical function, optimised with the jit compiler to improve code speed.
           self.x,self.vx=calculate_new_position_and_velocity(self.previous_x,self.previous_vx,timestep,self.charge,relativistic_mass,Ex)
@@ -413,10 +470,15 @@ def calculate_gamma(self):
      return(relativistic_gamma)
 
 def normalise_list(data):
-     '''Takes a python list as an input, converts it to a numpy array and normalises it'''
+     '''Takes a python list as an input, converts it to a numpy array and scales it so that it's maximum value is 1'''
      data=np.asarray(data)
      data=data/data.max()
      return(data)
+     
+def normalise_profile_area(data):
+     '''Takes a beam profile and normalises the area under the curve to 1 '''
+     normalised_profile=data/np.sum(data)
+     return(normalised_profile)
 
 def check_field_boundaries(x,y,z,field_data):
      #REMOVED TO SPEED UP CODE - rely on values calculated when analyse field was last called in the main code -->
@@ -469,15 +531,19 @@ def calculate_row_number(x,y,z):
      return(element_num)
 
 
-def calculate_95_width(profile_x,profile_y):
-     '''Returns the 95% width of the input profile.The output width will have the same dimensions as the input profile_x array
+def analyse_profile(profile_x,profile_y,min_peak_height=0):
+     '''Returns the 95% width of the input profile and the location of the peak.
      
-     E.G. For a horizontal profile measurement at ISIS, profile_x should contain the positions of the centre of each channeltron, and 
+     If multiple peaks are detected in the profile (e.g. due to noise), increase the peak threshold value to remove these.
+     
+     The position and width values and dimensions are calculated from the input profile_x array (see example below)
+     
+     E.G. For a horizontal profile measurement with an ISIS IPM, profile_x should contain the positions of the centre of each channeltron, and 
      profile_y should contain the measured beam profile, i.e. the particles measured by each channeltron.'''
      spacing=profile_x[1]-profile_x[0]
      lower_boundary=np.sum(profile_y)*0.025
      upper_boundary=np.sum(profile_y)*0.975
-     cumsum=0
+     cumsum=0 #cumulative sum
      i=0
      for data in profile_y:
           cumsum=cumsum+data
@@ -492,13 +558,84 @@ def calculate_95_width(profile_x,profile_y):
           i=i-1
      upper_location=i*spacing
      width95=upper_location-lower_location
-     return(width95)
-
+     
+     #find profile centre
+     midpoint=np.sum(profile_y)*0.5
+     i=0
+     cumsum=0
+     for data in profile_y:
+          cumsum=cumsum+data
+          if cumsum >= midpoint: break
+          i=i+1
+     centre_position=np.min(profile_x)+(i*spacing) #returns the centre position of the profile peak
+     return(width95,centre_position)
+     
+def calculate_percent_width(profile_x,profile_y,min_peak_height=0,percentage=95, hhw=False):
+     '''Returns the specified% width of the input profile, the half height width (if requested) and the location of the peak.
+     
+     If multiple peaks are detected in the profile (e.g. due to noise), increase the peak threshold value to remove these.
+     
+     The position and width values and dimensions are calculated from the input profile_x array (see example below)
+     
+     E.G. For a horizontal profile measurement with an ISIS IPM, profile_x should contain the positions of the centre of each channeltron, and 
+     profile_y should contain the measured beam profile, i.e. the particles measured by each channeltron.'''
+     
+     spacing=profile_x[1]-profile_x[0]
+     lower_boundary=np.sum(profile_y)*((100-percentage)/200)
+     upper_boundary=np.sum(profile_y)*(1-((100-percentage)/200))
+     cumsum=0 #cumulative sum
+     i=0
+     for data in profile_y:
+          cumsum=cumsum+data
+          if cumsum >= lower_boundary: break
+          i=i+1
+     lower_location=i*spacing
+     cumsum=np.sum(profile_y)
+     i=np.size(profile_y)
+     for data in reversed(profile_y):
+          cumsum=cumsum-data
+          if cumsum <= upper_boundary: break
+          i=i-1
+     upper_location=i*spacing
+     width=upper_location-lower_location
+     
+     #find profile centre
+     midpoint=np.sum(profile_y)*0.5
+     i=0
+     cumsum=0
+     for data in profile_y:
+          cumsum=cumsum+data
+          if cumsum >= midpoint: break
+          i=i+1
+     centre_position=np.min(profile_x)+(i*spacing) #returns the centre position of the profile peak
+     
+     if hhw==True:
+          i=0
+          half_height=0.5*np.max(profile_y)
+          for data in profile_y:
+               if data >= half_height: break
+               i=i+1
+          lower_location=i*spacing
+          i=np.size(profile_y)
+          for data in reversed(profile_y):
+               if data >= half_height: break
+               i=i-1
+          upper_location=i*spacing
+          hhw=upper_location-lower_location
+          return(width,centre_position,hhw)
+     else:
+          return(width,centre_position)
+def moving_average(x, w):
+    return np.convolve(x, np.ones(w), 'valid') / w
 #######################################################################################################################################################################
 #MAIN PROGRAM
 print('**********************************************************************')
 print("*               ISIS IPM PARTICLE TRACKING CODE             CCW v3.0 *")
 print('**********************************************************************')
+
+#STOP THE PROGRAM PLOTTING THE SET OF MANUALLY INPUT IBIC PLOTS AND HARP DATA AT AFTER TRACKING
+ibicplots=False
+
 #Import and Analyse the Electric Field From CST
 plt.close('all') #close anyt plots still open from previous runs of the code
 print("Please choose CST electric field files...\n The first file chosen should contain the IPM and particle beam, the second file should contain the IPM with no beam.\nIf only one file is needed, select the same file twice.\n**IMPORTANT - Both fields must be the same size, cover the same co-ordinates and have the same resolution.**\n-------------------------------------\n")
@@ -513,14 +650,21 @@ if not filepath_withbeam or not filepath_nobeam: #check that both filepaths were
 
 select_harp=True
 if select_harp:
-     harp_filepath='C:\\Users\\vwa13369\\Desktop\\IPM_Particle_Tracking_Code\\Harp Profiles 21July2019 Shift\\EPM26A.dat'
-     harp_data=pd.read_csv(harp_filepath,header=None,nrows=8,skiprows=[0,9,10], delim_whitespace=True)
-     hor_harp_data=harp_data[0:4]
-     hor_harp_data=hor_harp_data.values.flatten()
-     ver_harp_data=harp_data[4:8]
-     ver_harp_data=ver_harp_data.values.flatten()
-     
-     
+     harp_filepath='C:\\Users\\vwa13369\\Desktop\\IPM_Particle_Tracking_Code\\Harp Profiles 21July2019 Shift\\EPM26A2.dat'     
+     if harp_filepath==None: 
+          select_harp=False
+          print('No harp monitor data loaded')
+     else:
+          hor_harp,ver_harp,harp_wire_positions=read_harp_data(harp_filepath)
+          #interpolate the data to accurately calculate widths and centre positions
+          interpolated_harp_wire_positions=np.linspace(-69,69,1000)
+          interpolated_hor_harp_profile=np.interp(interpolated_harp_wire_positions,harp_wire_positions,hor_harp)
+          interpolated_ver_harp_profile=np.interp(interpolated_harp_wire_positions,harp_wire_positions,ver_harp)
+          #analyse the profiles for 95% widths and centre positions in each plane
+          hor_harp_width,hor_harp_centre=analyse_profile(interpolated_harp_wire_positions,interpolated_hor_harp_profile)
+          ver_harp_width,ver_harp_centre=analyse_profile(interpolated_harp_wire_positions,interpolated_ver_harp_profile)
+          print('Harp profile loaded from: '+harp_filepath)
+          print('Beam X Centre = '+str(hor_harp_centre)+'mm, Beam Y Centre = '+str(ver_harp_centre)+'mm, \nHorizontal 95% Width = '+str(hor_harp_width)+'mm, Vertical 95% Width = '+str(ver_harp_width)+'mm\n\n')
      
 #filepath='C:\\Users\\vwa13369\\Desktop\\AccPhys 2016\\2019_Field_Maps\\-15kV_-1400VBias_2_27e13ppp_radx_54_9_rady_41_5_xoff_0_86_yoff_-2_9_CFOFF.txt'
 running_times={'start time':time.time(),'field boundary check start':0,'field boundary check finish':0,'calculate gamma start':0,'calculate gamma finished':0,'particle move start':0,'particle move finished':0} #Log the time to calculate the execution time of the code
@@ -556,13 +700,13 @@ print("Electric field values loaded into seperate numpy array for fast access.")
 #--------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 #generate an ion distribution
-particle_num=5000 #the number of particles that should be generated inside the monitor
-tracking_steps=2000
+particle_num=20000 #the number of particles that should be generated inside the monitor
+tracking_steps=4000
 input_timestep=1e-9
 bunch_length=100e-9
 bunch_spacing=225e-9
 number_of_bunches=2
-time_resolution=16e-9 #time resolution in seconds
+time_resolution=8e-9 #time resolution in seconds
 plot_detected_only=True
 
 store_trajectories=True
@@ -574,15 +718,22 @@ if store_trajectories:
 
 #------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 #GENERATE PARTICLE DISTIBUTION
-beam_xrad=25
-beam_yrad=26#26
+beam_xrad=25/0.95 #/0.95 to scale the radius up from a 95% width to a 100% width
+beam_yrad=26/0.95
 beam_xpos=1
 beam_ypos=6
 beam_length_mm=500
 
+#if harp data has been chosen, match the beam properties to the harp data
+if select_harp==True:
+     beam_xrad=(hor_harp_width/2)/0.95
+     beam_yrad=(ver_harp_width/2)/0.95
+     beam_xpos=hor_harp_centre
+     beam_ypos=ver_harp_centre
+
 #if disctribution is not specified, a uniform distribution will be generated
 #beam_distribution='gaussian' 
-beam_distribution='uniform'
+beam_distribution='beta'
 
 detector_z_centre=detector_zmin+((detector_zmax-detector_zmin)/2)
 beam_zmin=detector_z_centre-(beam_length_mm/2)
@@ -615,11 +766,10 @@ for j in range(0,number_of_bunches):
 #               particle_x=(np.random.normal(loc=beam_xpos,scale=0.5*beam_xrad,size=1)[0])
 #               particle_y=(np.random.normal(loc=beam_ypos,scale=0.5*beam_yrad,size=1)[0])
           elif beam_distribution=='beta':
-               print("\n\n***********\n\nBETA DISTRIBUTION NOT WORKING PROPERLY YET...LOOKS MORE LIKE A DONUT!!\n\n*********************")
-               alpha=1.7
-               beta=1.7
+               alpha=1
+               beta=1
                #generate random magnitudes and angles in polar co-ordinate values using the x radius, this will be converted into a circular beam with a beta distribution, then stretched along the y axis to complete the beam generation
-               particle_r=((np.random.beta(alpha,beta))**0.5)*beam_xrad #generate a random magnitude using the beta distribution. The random number needs to be square rooted to ensure that distribution is not weighted too much towards the inside of the beam when the polar co-ordinates are converted back into cartesian co-ordinates (for explanation see:http://www.anderswallin.net/2009/05/uniform-random-points-in-a-circle-using-polar-coordinates/)
+               particle_r=((abs((np.random.beta(alpha,beta))-0.5)*2)**0.5)*beam_xrad #generate a random magnitude using the beta distribution. The random number needs to be square rooted to ensure that distribution is not weighted too much towards the inside of the beam when the polar co-ordinates are converted back into cartesian co-ordinates (for explanation see:http://www.anderswallin.net/2009/05/uniform-random-points-in-a-circle-using-polar-coordinates/)
                #WEDNESDAY 31st JULY
                #need to calculate the "inverse of the cumulative distribution for the beta function...for a uniform distribution it is just sqrt(r)
                particlers.append(particle_r)
@@ -639,21 +789,30 @@ for j in range(0,number_of_bunches):
                particle_x=(particle_r*math.cos(math.radians(particle_theta))+beam_xpos)
                particle_y=((particle_r*math.sin(math.radians(particle_theta))*beam_yrad/beam_xrad)+beam_ypos)
           particle_z=np.random.uniform(low=beam_zmin,high=beam_zmax)
-          Particle(x=particle_x,y=particle_y,z=particle_z,creation_time=particle_creation_time, species='proton',ID=particle_counter-1)
+          #if particle_counter%3==0: Particle(x=particle_x,y=particle_y,z=particle_z,creation_time=particle_creation_time, species='oxygen',ID=particle_counter-1)
+          #elif particle_counter%3==1: Particle(x=particle_x,y=particle_y,z=particle_z,creation_time=particle_creation_time, species='N2',ID=particle_counter-1)
+          dice=(np.random.rand())*2
+          if dice <= 0.62: Particle(x=particle_x,y=particle_y,z=particle_z,creation_time=particle_creation_time, species='H20+',ID=particle_counter-1)
+          elif dice > 0.62 and dice <= 0.78: Particle(x=particle_x,y=particle_y,z=particle_z,creation_time=particle_creation_time, species='OH+',ID=particle_counter-1)
+          elif dice > 0.78 and dice <= 0.98: Particle(x=particle_x,y=particle_y,z=particle_z,creation_time=particle_creation_time, species='proton',ID=particle_counter-1)
+          elif dice > 0.98 and dice <= 1: Particle(x=particle_x,y=particle_y,z=particle_z,creation_time=particle_creation_time, species='oxygen',ID=particle_counter-1)
+          elif dice > 1 and dice <= 1.2: Particle(x=particle_x,y=particle_y,z=particle_z,creation_time=particle_creation_time, species='H2',ID=particle_counter-1)
+          elif dice > 1.2 and dice <= 1.6: Particle(x=particle_x,y=particle_y,z=particle_z,creation_time=particle_creation_time, species='N+',ID=particle_counter-1)
+          else: Particle(x=particle_x,y=particle_y,z=particle_z,creation_time=particle_creation_time, species='N2',ID=particle_counter-1)
           particle_counter=particle_counter+1
 print("Particle beam generated, using a "+beam_distribution+" probability distribution, containing "+str(len(particles))+" particles.")
 particles=np.array(particles)
 print("Particle list converted to numpy array for faster tracking.")
-xpositions=[]
-ypositions=[]
-for particle in particles:
-    xpositions.append(particle.x)
-    ypositions.append(particle.y)
-plt.figure()
-plt.scatter(xpositions,ypositions)
-plt.figure()
-plt.hist(xpositions,bins=100)
-plt.show()
+#xpositions=[]
+#ypositions=[]
+#for particle in particles:
+#    xpositions.append(particle.x)
+#    ypositions.append(particle.y)
+#plt.figure()
+#plt.scatter(xpositions,ypositions)
+#plt.figure()
+#plt.hist(xpositions,bins=100)
+#plt.show()
 
 running_times['finished beam generation']=time.time()
 #%%
@@ -845,13 +1004,13 @@ plt.axis([min_z,max_z,-150,150]) #the first 2 elements set the lower and upper x
 
 #plot time distribution of detected particles
 bin_num=int(np.ceil((tracking_steps*input_timestep)/time_resolution))
-
 plt.subplot(2,4,5)
 plt.hist(particle_time_structure[:,0]*1e9, bins=bin_num, range=(0,(tracking_steps*input_timestep*1e9)), edgecolor='black', color='orange')
 plt.title("Time Structure of Particles Created\n Resolution = "+str(time_resolution*1e9)+"ns")
 plt.xlabel('Time Elapsed(ns)')
 plt.ylabel('Particles Detected')   
-     
+
+bin_num=int(np.ceil((tracking_steps*input_timestep)/time_resolution))
 plt.subplot(2,4,6)
 plt.title("Time Structure of Detected Particles\n Resolution = "+str(time_resolution*1e9)+"ns")
 plt.xlabel('Time Elapsed(ns)')
@@ -873,10 +1032,13 @@ plt.tight_layout()
 plt.subplots_adjust(bottom=0.15)
 plt.figtext(0.05,0.09,'Simulation Details',weight='bold')
 plt.figtext(0.05,0.07,'Electric Field Information: Imported Step Size = '+str(step_size)+' mm, X Max = '+str(max_x)+' mm, X Min = '+str(min_x)+", Y Max = "+str(max_y)+' mm, Y Min = '+str(min_y)+', Z Max = '+str(max_z)+' mm, Z Min = '+str(min_z)+'mm')
-plt.figtext(0.05,0.05,'Type of particles tracked = '+particle.species+"s")
+plt.figtext(0.05,0.05,'Type of particle tracked = '+particle.species)
 plt.figtext(0.05,0.03,'Electric Field Filepath 1: '+filepath_withbeam)
 plt.figtext(0.05,0.01,'Electric Field Filepath 2: '+filepath_nobeam)
 
+if ibicplots==False: 
+     print('Tracking Simulation Complete - Please run specific plotting cells manually as required.')
+     sys.exit()
 #plot particle trajectories
 #
 #plt.figure()
@@ -890,35 +1052,236 @@ plt.figtext(0.05,0.01,'Electric Field Filepath 2: '+filepath_nobeam)
 #          ax.plot3D(particle_tracks[i][2],particle_tracks[i][0],particle_tracks[i][1])
      #plt.plot(particle_tracks[i][0],particle_tracks[i][1],particle_tracks[i][2])
 
+#%%
+#---------------------------------------------------------------------------------------------------------------------------------
 #plot a comparison of profiles
+#generate histograms, each containing 2 arrays. Arrays at [0] contains profile data, arrays at [1] contain the position of each profile data point (e.g. channeltron position, harp wire position)
 ideal_profile_data=np.histogram(initial_positions[:,0],bins=40, range=(-120,120))
-ideal_profile=ideal_profile_data[0]/np.sum(ideal_profile_data[0])
+ideal_profile=normalise_profile_area(ideal_profile_data[0])
 profile_data=np.histogram(detected_particles[:,0],bins=40, range=(-120,120))
 channeltron_positions=profile_data[1]-3
 channeltron_positions=np.delete(channeltron_positions,0)
-detected_profile=profile_data[0]/np.sum(profile_data[0])
+detected_profile=normalise_profile_area(profile_data[0])
+
 
 #interpolate the profiles with 1000 points to make analysis more accurate (e.g. 95% width calculation)
 interpolated_channeltron_positions=np.linspace(-120,120,1000)
 interpolated_ideal_profile=np.interp(interpolated_channeltron_positions,channeltron_positions,ideal_profile)
 interpolated_detected_profile=np.interp(interpolated_channeltron_positions,channeltron_positions,detected_profile)
 
-#calculate 95% widths
-ideal_95w=calculate_95_width(interpolated_channeltron_positions,interpolated_ideal_profile)
-detected_95w=calculate_95_width(interpolated_channeltron_positions,interpolated_detected_profile)
+#normalise the harp profile and create and interpolated version for plotting comparisons
+hor_harp=normalise_profile_area(hor_harp)
+interpolated_harp_wire_positions=np.linspace(-69,69,1000)
+interpolated_hor_harp_profile=np.interp(interpolated_harp_wire_positions,harp_wire_positions,hor_harp)
+
+
+#calculate 95% widths and peak centres
+width_percent=95
+ideal_95w,ideal_centre=calculate_percent_width(interpolated_channeltron_positions,interpolated_ideal_profile,percentage=width_percent)
+detected_95w,detected_centre=calculate_percent_width(interpolated_channeltron_positions,interpolated_detected_profile,percentage=width_percent)
+harp_95w,harp_centre=calculate_percent_width(interpolated_harp_wire_positions,interpolated_hor_harp_profile,percentage=width_percent)
+
+
+###################IBIC 2019 MANUAL DATA INPUT ################################################################
+#do the same for the MCPM data daken during machine physics measurements
+
+#Get a profile measured using the fast amplifiers on the ISIS EPB MCPM
+ctron_time_data,MCPM_integrated_profile,MCPM_filepath=get_fast_amplifier_profile() #integrated data: index 0 contains single channel data, which should be ignored. Indexes 1-40 contain MCPM data
+print("MCPM Profile Data: "+str(MCPM_integrated_profile))
+backup_MCPM_integrated_profile=MCPM_integrated_profile
+#MCPM_integrated_profile=[0.023,0.051,-0.020,0.120,0.003,0.036,0.048,0.309,0.246,0.749,2.062,1.284,6.159,7.387,9.593,10.068,12.813,10.268,12.927,11.854,12.905,11.220,13.474,15.672,9.889,9.427,5.919,6.155,2.333,1.390,0.774,0.035,0.073,0.072,-0.353,-0.039,0.035,0.013,0.596,-0.004]
+MCPM_profile=normalise_profile_area(MCPM_integrated_profile)
+interpolated_MCPM_profile=np.interp(interpolated_channeltron_positions,channeltron_positions,MCPM_profile)
+MCPM_95w,MCPM_centre,MCPM_hhw=calculate_percent_width(interpolated_channeltron_positions,interpolated_MCPM_profile,percentage=width_percent,hhw=True)
+#IBIC2019 Measurements Manual Input of each time peak
+#first small peak in measurement, with bias set high to make it visible
+#INTEGRATION WINDOW = 4.4-4.7us
+#calibrated
+peak1_profile=[0.095,0.046,-0.023,-0.026,1.438,0.606,1.819,0.781,1.120,0.328,0.893,0.183,1.493,1.846,2.324,2.215,2.014,1.863,3.734,2.407,2.625,2.090,2.756,2.289,2.072,2.196,1.408,1.382,0.934,0.561,0.529,0.876,0.232,0.189,0.975,0.163,1.095,-0.047,-0.839,0.082]
+#raw
+#peak1_profile=[0.355,0.280,0.496,0.062,0.376,0.754,0.332,0.667,0.959,1.206,1.234,0.145,1.391,1.843,1.387,0.849,0.443,0.601,0.826,1.667,2.661,0.438,1.622,0.673,1.733,0.773,0.527,0.706,1.460,0.312,1.185,0.649,0.326,0.789,0.264,0.511,0.100,0.144,0.100,0.425]
+
+peak1_profile=np.asarray(peak1_profile)
+peak1_profile=normalise_profile_area(peak1_profile)
+interpolated_peak1_profile=np.interp(interpolated_channeltron_positions,channeltron_positions,peak1_profile)
+peak1_95w,peak1_centre,peak1_hhw=calculate_percent_width(interpolated_channeltron_positions,interpolated_peak1_profile,percentage=width_percent,hhw=True)
+
+#first small peak in measurement, with bias set high to make it visible
+#INTEGRATION WINDOW = 4.7-5us
+#peak2_profile=[0.105,0.143,-0.038,-0.030,2.597,0.972,3.867,1.625,1.923,0.625,1.740,0.598,3.170,3.856,4.897,4.923,4.945,4.337,6.347,5.532,5.348,5.551,6.116,6.346,4.018,4.475,3.369,2.806,1.711,1.218,1.095,1.378,0.441,0.330,2.054,0.203,1.635,-0.128,-1.024,0.051]
+#ALTERNATE INTEGRATION WINDOW 4.75-5
+#calibrated
+peak2_profile=[0.010,0.007,-0.003,-0.004,0.110,0.040,0.090,0.071,0.062,0.020,0.055,0.041,0.086,0.128,0.174,0.152,0.098,0.077,0.158,0.234,0.253,0.147,0.241,0.203,0.199,0.091,0.123,0.117,0.077,0.035,0.035,0.058,0.010,0.017,0.041,0.009,0.023,-0.001,0.010,-0.001]
+#raw
+#peak2_profile=[0.040,0.012,0.023,0.157,0.033,0.049,0.011,0.165,0.057,0.081,0.068,0.081,0.100,0.108,0.074,0.086,0.028,0.020,0.047,0.177,0.197,0.011,0.148,0.079,0.164,0.052,0.043,0.090,0.124,0.028,0.061,0.114,0.016,0.099,0.024,0.084,-0.002,0.009,0.010,0.081]
+
+peak2_profile=np.asarray(peak2_profile)
+peak2_profile=normalise_profile_area(peak2_profile)
+interpolated_peak2_profile=np.interp(interpolated_channeltron_positions,channeltron_positions,peak2_profile)
+peak2_95w,peak2_centre,peak2_hhw=calculate_percent_width(interpolated_channeltron_positions,interpolated_peak2_profile,percentage=width_percent, hhw=True)
+
+#first small peak in measurement, with bias set high to make it visible
+#INTEGRATION WINDOW = us
+#calibrated
+peak3_profile=[-0.000,0.004,-0.000,0.048,0.043,0.013,-0.073,-0.219,0.059,0.095,0.436,-0.023,0.751,0.955,1.149,1.002,0.879,0.907,1.186,1.258,1.544,0.785,1.643,1.357,1.408,0.839,0.897,0.771,0.511,0.130,0.099,0.023,0.002,0.002,0.015,0.004,-0.106,-0.005,-0.037,0.002]
+#raw
+#peak3_profile=[-0.001,-0.004,-0.000,-0.174,-0.005,0.005,-0.011,-0.074,0.069,0.331,0.443,0.063,0.841,0.963,0.624,0.439,0.185,0.272,0.338,0.858,1.480,0.158,0.991,0.334,1.236,0.307,0.331,0.370,0.828,0.067,0.272,0.029,0.007,0.016,0.013,0.023,0.001,0.021,0.030,0.021]
+
+peak3_profile=np.asarray(peak3_profile)
+peak3_profile=normalise_profile_area(peak3_profile)
+interpolated_peak3_profile=np.interp(interpolated_channeltron_positions,channeltron_positions,peak3_profile)
+peak3_95w,peak3_centre,peak3_hhw=calculate_percent_width(interpolated_channeltron_positions,interpolated_peak3_profile,percentage=width_percent,hhw=True)
+
+#first small peak in measurement, with bias set high to make it visible
+#INTEGRATION WINDOW = 5.3-5.7us
+#calibrated
+peak4_profile=[0.008,0.003,-0.000,0.020,0.030,0.012,0.006,-0.081,0.002,0.169,1.249,0.485,3.019,4.125,5.803,5.596,4.748,4.571,6.740,6.235,6.213,5.094,7.089,6.649,6.141,3.946,4.107,3.491,1.671,0.509,0.045,-0.053,-0.009,0.001,-0.053,-0.003,0.036,0.009,0.066,-0.001]
+#raw
+#peak4_profile=[-0.012,0.015,0.027,0.205,0.009,0.013,0.005,-0.024,-0.026,0.309,0.830,0.144,2.001,2.445,1.648,1.150,0.655,0.924,1.113,2.300,3.887,0.563,2.691,0.923,3.528,0.868,0.928,0.964,1.560,0.122,0.057,-0.031,-0.003,0.006,-0.008,0.004,-0.004,-0.004,0.007,0.024]
+
+peak4_profile=np.asarray(peak4_profile)
+peak4_profile=normalise_profile_area(peak4_profile)
+interpolated_peak4_profile=np.interp(interpolated_channeltron_positions,channeltron_positions,peak4_profile)
+peak4_95w,peak4_centre,peak4_hhw=calculate_percent_width(interpolated_channeltron_positions,interpolated_peak4_profile,percentage=width_percent, hhw=True)
+
+#first small peak in measurement, with bias set high to make it visible
+#INTEGRATION WINDOW = 5.7-6us
+#calibrated
+peak5_profile=[-0.003,0.002,-0.002,-0.043,-0.024,-0.002,0.089,0.150,0.006,0.007,0.021,0.125,0.890,1.902,3.141,3.415,3.406,3.410,4.606,4.143,4.050,3.955,4.225,4.600,3.520,2.111,1.546,0.876,0.107,-0.003,0.006,-0.012,-0.001,0.004,0.003,-0.001,-0.082,-0.001,0.003,-0.002]
+#raw
+#peak5_profile=[0.028,0.012,0.002,0.226,0.022,0.021,0.008,0.158,0.005,0.032,0.018,0.075,0.554,1.096,0.893,0.810,0.463,0.710,0.793,1.631,2.561,0.455,1.710,0.680,2.076,0.481,0.349,0.215,0.057,-0.009,0.018,-0.037,0.007,0.009,0.011,-0.031,0.006,0.020,0.006,-0.009]
+
+peak5_profile=np.asarray(peak5_profile)
+peak5_profile=normalise_profile_area(peak5_profile)
+interpolated_peak5_profile=np.interp(interpolated_channeltron_positions,channeltron_positions,peak5_profile)
+peak5_95w,peak5_centre,peak5_hhw=calculate_percent_width(interpolated_channeltron_positions,interpolated_peak5_profile,percentage=width_percent, hhw=True)
+
+#calibrated
+peaks1_2_profile=[0.188,0.133,-0.058,-0.043,2.247,1.138,3.337,1.243,1.877,0.592,1.891,0.310,2.479,3.357,4.591,4.103,3.501,3.206,5.131,4.534,4.880,3.992,5.166,4.687,3.576,3.480,2.369,2.644,1.490,0.916,0.904,1.252,0.392,0.349,2.094,0.215,1.941,-0.099,-1.481,0.107]
+peaks1_2_profile=np.asarray(peaks1_2_profile)
+peaks1_2_profile=normalise_profile_area(peaks1_2_profile)
+interpolated_peaks1_2_profile=np.interp(interpolated_channeltron_positions,channeltron_positions,peaks1_2_profile)
+peaks1_2_95w,peaks1_2_centre,peak1_2_hhw=calculate_percent_width(interpolated_channeltron_positions,interpolated_peaks1_2_profile,percentage=width_percent, hhw=True)
+##################################################################################################################
+
+
 plt.figure()
 plt.title("Comparison of Profiles\n (Area Under Profiles Normalised)")
 plt.xlabel('x (mm)')
 plt.ylabel('Detected Particles (arbitrary units)')
 plt.plot(interpolated_channeltron_positions, interpolated_detected_profile)
+plt.plot(interpolated_harp_wire_positions, interpolated_hor_harp_profile,'--',color='red')
 plt.plot(interpolated_channeltron_positions, interpolated_ideal_profile,'--')
-plt.legend(['Simulated IPM\nMeasurement','Actual Beam Profile'], loc='upper right')
-plt.figtext(0.05,0.13,'Electric Field Information: Imported Step Size = '+str(step_size)+' mm, X Max = '+str(max_x)+' mm, X Min = '+str(min_x)+", Y Max = "+str(max_y)+' mm, Y Min = '+str(min_y)+', Z Max = '+str(max_z)+' mm, Z Min = '+str(min_z)+'mm')
-plt.figtext(0.05,0.10,'Actual Beam: 95% Width = '+str("{:10.2f}".format(ideal_95w))+"mm")
-plt.figtext(0.05,0.07,'Simulated Measurement: 95% Width = '+str("{:10.2f}".format(detected_95w))+"mm")
-plt.figtext(0.05,0.04,'Electric Field 1 Filepath: '+filepath_withbeam)
-plt.figtext(0.05,0.01,'Electric Field 2 Filepath: '+filepath_nobeam)
+plt.plot(interpolated_channeltron_positions, interpolated_MCPM_profile)
+plt.legend(['Simulated IPM\nMeasurement','EPM 26A Harp \nMonitor Profile','Generated Beam\nDistribution\nIn Simulation','Measured Profile\nwith EPB1 MCPM'], loc='upper right')
+plt.figtext(0.05,0.16,'Electric Field Information: Imported Step Size = '+str(step_size)+' mm, X Max = '+str(max_x)+' mm, X Min = '+str(min_x)+", Y Max = "+str(max_y)+' mm, Y Min = '+str(min_y)+', Z Max = '+str(max_z)+' mm, Z Min = '+str(min_z)+'mm')
+plt.figtext(0.05,0.14,'Actual Beam: '+str(width_percent)+'% Width = '+str("{:10.2f}".format(ideal_95w))+"mm")
+plt.figtext(0.05,0.12,'Simulated Measurement: '+str(width_percent)+'% Width = '+str("{:10.2f}".format(detected_95w))+"mm")
+plt.figtext(0.05,0.10,'Harp Beam: '+str(width_percent)+'% Width'+str("{:10.2f}".format(harp_95w))+"mm")
+plt.figtext(0.05,0.08,'MCPM Beam: '+str(width_percent)+'% Width = '+str("{:10.2f}".format(MCPM_95w))+"mm")
+plt.figtext(0.05,0.06,'Electric Field 1 Filepath: '+filepath_withbeam)
+plt.figtext(0.05,0.04,'Electric Field 2 Filepath: '+filepath_nobeam)
+plt.figtext(0.05,0.02,'MCPM Data Filepath: '+MCPM_filepath)
 plt.subplots_adjust(bottom=0.27)
+plt.show()
+
+plt.figure()
+plt.title("Comparison of Simulated and Measured Profiles\n (Area Under Profiles Normalised)")
+plt.xlabel('x (mm)')
+plt.ylabel('Detected Particles (arbitrary units)')
+plt.plot(interpolated_channeltron_positions, interpolated_detected_profile)
+plt.plot(interpolated_channeltron_positions, interpolated_MCPM_profile)
+#plt.plot(interpolated_channeltron_positions, interpolated_peak1_profile)
+plt.legend(['Simulated IPM\nMeasurement','Measured Profile\nwith EPB1 MCPM'], loc='upper right')
+plt.figtext(0.05,0.18,'Electric Field Information: Imported Step Size = '+str(step_size)+' mm, X Max = '+str(max_x)+' mm, X Min = '+str(min_x)+", Y Max = "+str(max_y)+' mm, Y Min = '+str(min_y)+', Z Max = '+str(max_z)+' mm, Z Min = '+str(min_z)+'mm')
+plt.figtext(0.05,0.16,'Actual Beam: '+str(width_percent)+'% Width = '+str("{:10.2f}".format(ideal_95w))+"mm")
+plt.figtext(0.05,0.14,'Simulated Measurement: '+str(width_percent)+'% Width = '+str("{:10.2f}".format(detected_95w))+"mm")
+plt.figtext(0.05,0.12,'MCPM Beam: '+str(width_percent)+'% Width = '+str("{:10.2f}".format(MCPM_95w))+"mm")
+#plt.figtext(0.05,0.10,'Peak #1 Beam: '+str(width_percent)+'% Width = '+str("{:10.2f}".format(peak1_95w))+"mm")
+plt.figtext(0.05,0.08,'Type of particle tracked = '+particle.species)
+plt.figtext(0.05,0.06,'Electric Field 1 Filepath: '+filepath_withbeam)
+plt.figtext(0.05,0.04,'Electric Field 2 Filepath: '+filepath_nobeam)
+plt.figtext(0.05,0.02,'MCPM Data Filepath: '+MCPM_filepath)
+plt.subplots_adjust(bottom=0.27)
+plt.show()
+
+plt.figure()
+plt.title("Comparison of Measured Profiles From Each Individual Time Peak\n (Area Under Profiles Normalised)")
+plt.xlabel('x (mm)')
+plt.ylabel('Detected Particles (arbitrary units)')
+plt.plot(interpolated_channeltron_positions, interpolated_detected_profile)
+plt.plot(interpolated_channeltron_positions, interpolated_MCPM_profile)
+plt.plot(interpolated_channeltron_positions, interpolated_peak1_profile,'--')
+plt.plot(interpolated_channeltron_positions, interpolated_peak2_profile,'--')
+plt.plot(interpolated_channeltron_positions, interpolated_peak3_profile,'--')
+plt.plot(interpolated_channeltron_positions, interpolated_peak4_profile,'--')
+plt.plot(interpolated_channeltron_positions, interpolated_peak5_profile,'--')
+#plt.plot(interpolated_channeltron_positions, interpolated_peaks1_2_profile,'--')
+plt.legend(['Simulated IPM\nMeasurement','Measured Profile\nwith EPB1 MCPM','Measured Profile\nPeak #1 Only','Measured Profile\nPeak #2 Only','Measured Profile\nPeak #3 Only','Measured Profile\nPeak #4 Only','Measured Profile\nPeak #5 Only'], loc='upper right')
+plt.figtext(0.05,0.2,'Electric Field Information: Imported Step Size = '+str(step_size)+' mm, X Max = '+str(max_x)+' mm, X Min = '+str(min_x)+", Y Max = "+str(max_y)+' mm, Y Min = '+str(min_y)+', Z Max = '+str(max_z)+' mm, Z Min = '+str(min_z)+'mm')
+plt.figtext(0.05,0.18,'Actual Beam: '+str(width_percent)+'% Width = '+str("{:10.2f}".format(ideal_95w))+"mm")
+plt.figtext(0.05,0.16,'Simulated Measurement: '+str(width_percent)+'% Width = '+str("{:10.2f}".format(detected_95w))+"mm")
+plt.figtext(0.05,0.14,'MCPM Beam: '+str(width_percent)+'% Width = '+str("{:10.2f}".format(MCPM_95w))+"mm")
+plt.figtext(0.05,0.11,'Peak #1: '+str(width_percent)+'% Width = '+str("{:10.2f}".format(peak1_95w))+"mm"+', Peak #2: '+str(width_percent)+'% Width = '+str("{:10.2f}".format(peak2_95w))+"mm"+', Peak #3: '+str(width_percent)+'% Width = '+str("{:10.2f}".format(peak3_95w))+"mm"+', Peak #4: '+str(width_percent)+'% Width = '+str("{:10.2f}".format(peak4_95w))+"mm"+', Peak #5: '+str(width_percent)+'% Width = '+str("{:10.2f}".format(peak5_95w))+"mm")
+plt.figtext(0.05,0.09,'Peak #1: FWHM = '+str("{:10.2f}".format(peak1_hhw))+"mm"+', Peak #2 FWHM = '+str("{:10.2f}".format(peak2_hhw))+"mm"+', Peak #3 FWHM = '+str("{:10.2f}".format(peak3_hhw))+"mm"+', Peak #4 FWHM = '+str("{:10.2f}".format(peak4_hhw))+"mm"+', Peak #5 FWHM = '+str("{:10.2f}".format(peak5_hhw))+"mm")
+plt.figtext(0.05,0.07,'Type of particle tracked = '+particle.species)
+plt.figtext(0.05,0.05,'Electric Field 1 Filepath: '+filepath_withbeam)
+plt.figtext(0.05,0.03,'Electric Field 2 Filepath: '+filepath_nobeam)
+plt.figtext(0.05,0.01,'MCPM Data Filepath: '+MCPM_filepath)
+plt.subplots_adjust(bottom=0.27)
+plt.show()
+
+#%%
+
+#drift field sweep of time data
+ctron_time_data_3kV,dummy1,dummy2=get_fast_amplifier_profile()#(filepath='C:\\Users\\vwa13369\\Desktop\\IPM_Particle_Tracking_Code\\IBIC 2019 Machine Physics Data 2_Sep\\Drift_Field_Sweep_Setup_Settings\\EPB1_MCPM_020919_150021.csv')
+ctron_time_data_5kV,dummy1,dummy2=get_fast_amplifier_profile()#(filepath='C:\\Users\\vwa13369\\Desktop\\IPM_Particle_Tracking_Code\\IBIC 2019 Machine Physics Data 2_Sep\\Drift_Field_Sweep_Setup_Settings\\EPB1_MCPM_020919_145927.csv') 
+ctron_time_data_10kV,dummy1,dummy2=get_fast_amplifier_profile()#(filepath='C:\\Users\\vwa13369\\Desktop\\IPM_Particle_Tracking_Code\\IBIC 2019 Machine Physics Data 2_Sep\\Drift_Field_Sweep_Setup_Settings\\EPB1_MCPM_020919_145829.csv') 
+ctron_time_data_15kV,dummy1,dummy2=get_fast_amplifier_profile()#(filepath='C:\\Users\\vwa13369\\Desktop\\IPM_Particle_Tracking_Code\\IBIC 2019 Machine Physics Data 2_Sep\\Drift_Field_Sweep_Setup_Settings\\EPB1_MCPM_020919_145800.csv') 
+ctron_time_data_20kV,dummy1,dummy2=get_fast_amplifier_profile()#(filepath='C:\\Users\\vwa13369\\Desktop\\IPM_Particle_Tracking_Code\\IBIC 2019 Machine Physics Data 2_Sep\\Drift_Field_Sweep_Setup_Settings\\EPB1_MCPM_020919_145631.csv') 
+ctron_time_data_25kV,dummy1,dummy2=get_fast_amplifier_profile()#(filepath='C:\\Users\\vwa13369\\Desktop\\IPM_Particle_Tracking_Code\\IBIC 2019 Machine Physics Data 2_Sep\\Drift_Field_Sweep_Setup_Settings\\EPB1_MCPM_020919_145542.csv') 
+ctron_time_data_30kV,dummy1,dummy2=get_fast_amplifier_profile()#(filepath='C:\\Users\\vwa13369\\Desktop\\IPM_Particle_Tracking_Code\\IBIC 2019 Machine Physics Data 2_Sep\\Drift_Field_Sweep_Setup_Settings\\EPB1_MCPM_020919_145523.csv')
+
+time_axis_size_ns=(ctron_time_data[:,0].size*(1/60e6))*1e9
+
+ctron_num=24
+start_time=4250 #start time for the plot. Beam pickup in the monitor starts at about 4520
+ctron_time_axis=np.linspace(8,time_axis_size_ns-8,ctron_time_data[:,0].size)
+ctron_time_axis=ctron_time_axis-start_time
+plt.figure()
+plt.title('Measured Channeltron Signal vs. Time')
+plt.xlabel('Time (ns)')
+plt.ylabel('Measured Voltage (V)')
+plt.plot(ctron_time_axis,ctron_time_data_3kV[:,ctron_num])
+#plt.plot(ctron_time_axis,ctron_time_data_5kV[:,ctron_num])
+plt.plot(ctron_time_axis,ctron_time_data_10kV[:,ctron_num])
+#plt.plot(ctron_time_axis,ctron_time_data_15kV[:,ctron_num])
+#plt.plot(ctron_time_axis,ctron_time_data_20kV[:,ctron_num])
+plt.plot(ctron_time_axis,ctron_time_data_25kV[:,ctron_num])
+#plt.plot(ctron_time_axis,ctron_time_data_30kV[:,ctron_num])
+plt.xlim(0,4000)
+#plt.legend(['3kV Drift Field','5kV Drift Field','10kV Drift Field','15kV Drift Field','20kV Drift Field','25kV Drift Field','30kV Drift Field'])
+plt.legend(['3kV Drift Field','10kV Drift Field','25kV Drift Field'])
+plt.figtext(0.05,0.06,'Beam Intensity = 2.27e13 ppp in EPB1, MCPM Bias = -1.33 kV')
+plt.figtext(0.05,0.04,'Channeltron plotted = '+str(ctron_num))
+plt.figtext(0.05,0.02,'Plot start time = '+str(start_time)+'ns')
+plt.show()
+
+plt.figure()
+plt.title('Measured Channeltron Signal vs. Time', fontsize=20)
+plt.xlabel('Time (ns)', fontsize=16)
+plt.ylabel('Measured Voltage (V)', fontsize=16)
+plt.plot(ctron_time_axis,ctron_time_data_3kV[:,ctron_num], linewidth=3)
+plt.plot(ctron_time_axis,ctron_time_data_10kV[:,ctron_num], linewidth=3)
+#plt.plot(ctron_time_axis,ctron_time_data_20kV[:,ctron_num])
+plt.plot(ctron_time_axis,ctron_time_data_30kV[:,ctron_num], linewidth=3)
+plt.xlim(0,4000)
+plt.legend(['3kV Drift Field','10kV Drift Field','30kV Drift Field'], fontsize=16)
+plt.figtext(0.05,0.06,'Filename = '+dummy2)
+plt.figtext(0.05,0.045,'Beam Intensity = 2.62e13 ppp in EPB1, MCPM Bias = -1.5 kV')
+plt.figtext(0.05,0.03,'Channeltron plotted = '+str(ctron_num))
+plt.figtext(0.05,0.015,'Plot start time = '+str(start_time)+'ns')
+plt.subplots_adjust(top=0.95,bottom=0.2,left=0.053,right=0.980)
 plt.show()
 
 
@@ -936,3 +1299,188 @@ print("\n TOTAL TIME IN PARTICLE.MOVE = "+str(running_times['TOTAL PARTICLE.MOVE
 print('***************************  END  ************************************')
 
 #######################################################################################################################################################################
+
+
+#%%
+#Manual Plot of peak detection times vs drift field for IBIC paper
+drift_field_values=[3,5,10,15,20,25,30] #in kV
+p1_times=[482,441,347,308,258,241,225] #in ns
+p2_times=[924,790,692-40,641-40,590-40,574-40,558-40]
+p3_times=[1561,1322,1042,919,825,725,693]
+p4_times=[2335,1945,1510,1305,1175,1042,960]
+p5_times=[3193,2576,1956,1673,1492,1376,1292]
+
+plt.figure()
+plt.rcParams["font.family"]="Century"
+#plt.title('Average Peak Detection Times vs. Drift Field Strength', fontsize=20)
+plt.xlabel('Drift Field Potential (kV)',fontsize=16)
+plt.ylabel('Average Detection Time (ns)',fontsize=16)
+plt.plot(drift_field_values,p1_times, marker="D")
+plt.plot(drift_field_values,p2_times, marker="D")
+plt.plot(drift_field_values,p3_times, marker="D")
+plt.plot(drift_field_values,p4_times, marker="D")
+plt.plot(drift_field_values,p5_times, marker="D")
+plt.legend(['Peak #1', 'Peak #2','Peak #3','Peak #4','Peak #5'], fontsize=14)
+plt.xticks(fontsize=14)
+plt.yticks(fontsize=14)
+plt.show()            
+
+
+#%%
+plt.figure()
+plt.xlabel('Time (ns)', fontsize=16)
+plt.ylabel('Measured Voltage (V)', fontsize=16)
+plt.plot(ctron_time_axis,ctron_time_data_25kV[:,ctron_num], color='C5')
+#plt.plot(ctron_time_axis,ctron_time_data_10kV[:,ctron_num], linestyle='dashed')
+#plt.plot(ctron_time_axis,ctron_time_data_25kV[:,ctron_num])
+plt.xlim(0,4000)
+plt.legend(['25 kV Drift Field','10 kV Drift Field','25 kV Drift Field'], fontsize=13)
+plt.xticks(fontsize=14)
+plt.yticks(fontsize=14)
+plt.show()
+
+
+#%%
+#PLOT TIME STRUCTURE AGAIN BUT AS LINE GRAPH
+bin_num=int(np.ceil((tracking_steps*input_timestep)/(2*time_resolution)))
+bin_num=int(bin_num/1)
+plt.figure()
+plt.title("Time Structure of Detected Particles\n Resolution = "+str(2*time_resolution*1e9)+"ns")
+plt.xlabel('Time Elapsed(ns)')
+plt.ylabel('Particles Detected')     
+if np.size(detected_particles) > 0:
+     test=plt.hist((detected_particles[:,6]+detected_particles[:,7])*1e9, bins=bin_num, range=(0,(tracking_steps*input_timestep*1e9)), edgecolor='black')
+times=test[1]+((test[1][1]-test[1][0])/2)
+times=np.delete(times,-1)
+creation_times=plt.hist(particle_time_structure[:,0]*1e9, bins=int(bin_num), range=(0,(tracking_steps*input_timestep*1e9)), edgecolor='black', color='orange')
+plt.figure()
+plt.xlabel('Time (ns)', fontsize=18)
+plt.ylabel('Total Ions Detected\n(Arbitrary units)', fontsize=18)
+plt.xticks(fontsize=16)
+plt.yticks(fontsize=16)
+plt.plot(times,test[0]*25)
+plt.plot(times,creation_times[0]*2.5, linestyle='dashed')
+plt.title('Simulated IPM Measurement Time Structure\n',fontsize=20)
+plt.legend(['Total No. Ions Detected','No. Ions Generated by Beam'], fontsize=16)
+plt.figtext(0.05,0.03,'Electric Field Filepath 1: '+filepath_withbeam)
+plt.figtext(0.05,0.01,'Electric Field Filepath 2: '+filepath_nobeam)
+plt.ylim(0,10000)
+plt.xlim(0,4000)
+plt.show()
+
+#%%
+#Plot integrated profile and fudge calibration factors as it was calibrated while saturating...
+#'C:\\Users\\vwa13369\\Desktop\\IPM_Particle_Tracking_Code\\IBIC 2019 Machine Physics Data 2_Sep\\Best_3D_Plot_shows_all_Things\\EPB1_MCPM_020919_151748.csv'
+ctron_time_data_3d,dummy1,dummy2=get_fast_amplifier_profile('C:\\Users\\vwa13369\\Desktop\\IPM_Particle_Tracking_Code\\IBIC 2019 Machine Physics Data 2_Sep\\Best_3D_Plot_shows_all_Things\\EPB1_MCPM_020919_151748.csv')#(filepath='C:\\Users\\vwa13369\\Desktop\\IPM_Particle_Tracking_Code\\IBIC 2019 Machine Physics Data 2_Sep\\Drift_Field_Sweep_Setup_Settings\\EPB1_MCPM_020919_150021.csv')
+integrated_data=[]
+for i in range(1,41):
+     integrated_data.append(np.sum(ctron_time_data_3d[:,i]))
+measured_cal=[0.046,0.517,0.434,0.796,0.187,0.968,0.232,1.467,0.827,0.801,3.147,0.943,1.742,2.144,2.901,0.951,2.638,1.326,4.458,0.893,1.21,2.295,2.878,3.252,1.966,1.349,0.816,0/812,2.237,0.663,0.32,0.302,0.237,0.582,0.122,0.155,0.227,-0.02,0.358,0.863]
+measured_cal=np.asarray(measured_cal)
+#manual_cal=[1,1,1,1,1,1,1,1,1,1,1.1,0.17,0.95,0.8,0.9,1,1.25,1.05,1,0.88,0.65,1.15,0.9,1.1,0.77,1,1.1,1,1,1,1,1,1,1,1,1,1,1,1,1]
+manual_cal=[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0.9,0.9,1,1,1,1,0.9,1,1,1.4,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
+manual_cal=np.asarray(manual_cal)
+averaged=moving_average(integrated_data,5)
+averaged=np.insert(averaged,0,0)
+averaged=np.insert(averaged,0,0)
+averaged=np.insert(averaged,-1,0)
+averaged=np.insert(averaged,-1,0)
+plt.figure()
+plt.plot(integrated_data*manual_cal)
+plt.plot(averaged)
+plt.legend(['Manual Calibration File','Rolling Average of Raw Data'])
+plt.show()
+#%%
+#PLOT 3D Graph of the data
+from mpl_toolkits.mplot3d import Axes3D
+from matplotlib import cm
+from matplotlib.ticker import LinearLocator, FormatStrFormatter
+
+ctron_time_data_3d,dummy1,dummy2=get_fast_amplifier_profile('C:\\Users\\vwa13369\\Desktop\\IPM_Particle_Tracking_Code\\IBIC 2019 Machine Physics Data 2_Sep\\Best_3D_Plot_shows_all_Things\\EPB1_MCPM_020919_151748.csv')#(filepath='C:\\Users\\vwa13369\\Desktop\\IPM_Particle_Tracking_Code\\IBIC 2019 Machine Physics Data 2_Sep\\Drift_Field_Sweep_Setup_Settings\\EPB1_MCPM_020919_150021.csv')#(filepath='C:\\Users\\vwa13369\\Desktop\\IPM_Particle_Tracking_Code\\IBIC 2019 Machine Physics Data 2_Sep\\Drift_Field_Sweep_Setup_Settings\\EPB1_MCPM_020919_150021.csv')
+start_time=4e-6#3000e-9
+end_time=7e-6#6000e-9
+start_sample=int(start_time/(1/60e6))
+end_sample=int(end_time/(1/60e6))
+num_samples=end_sample-start_sample
+for i in range(1,41):
+     ctron_time_data_3d[:,i]=ctron_time_data_3d[:,i]*manual_cal[i-1]
+
+x = channeltron_positions
+#y = np.linspace(0,1e-5,num=len(ctron_time_data_3d[:,1]))
+y = np.linspace(start_time,end_time,num=num_samples)
+y=(y*1e9)-4000
+X, Y = np.meshgrid(x, y)
+print(X.shape)
+print(Y.shape)
+
+z = ctron_time_data_3d[start_sample:end_sample,1:41]
+Z = z.reshape(X.shape)
+
+fig = plt.figure()
+ax = fig.add_subplot(111, projection ='3d')
+ax.plot_surface(X, Y, Z, rstride=1, cstride=1, cmap=cm.jet, linewidth=0, antialiased=False)
+#ax.view_init(elev=90, azim=0)
+#ax.view_init(elev=0, azim=0)
+#ax.set_ylim([0, 10])
+plt.ylim(0,3000)
+ax.set_ylabel('Time (ns)', fontsize=14)
+#ax.set_xlabel('Horizontal Position (mm)', fontsize=14)
+ax.set_zlabel('Measured Signal Strength (Arb.)', fontsize=14)
+plt.show()
+
+#%%
+def moving_average(a, n=3) :
+    ret = np.cumsum(a, dtype=float)
+    ret[n:] = ret[n:] - ret[:-n]
+    return ret[n - 1:] / n
+
+ctron_time_data_3d,dummy1,dummy2=get_fast_amplifier_profile()#'C:\\Users\\vwa13369\\Desktop\\IPM_Particle_Tracking_Code\\IBIC 2019 Machine Physics Data 2_Sep\\Best_3D_Plot_shows_all_Things\\EPB1_MCPM_020919_151748.csv')#(filepath='C:\\Users\\vwa13369\\Desktop\\IPM_Particle_Tracking_Code\\IBIC 2019 Machine Physics Data 2_Sep\\Drift_Field_Sweep_Setup_Settings\\EPB1_MCPM_020919_150021.csv')#(filepath='C:\\Users\\vwa13369\\Desktop\\IPM_Particle_Tracking_Code\\IBIC 2019 Machine Physics Data 2_Sep\\Drift_Field_Sweep_Setup_Settings\\EPB1_MCPM_020919_150021.csv')
+#manual_cal=[1,1,1,1,1,1,1,1,1,1,1,0.6,1,1,1,1,0.85,0.9,0.9,1.5,1.8,0.7,1.4,1,1.9,1,1,1,1,0.75,1,1,1,1,1,1,1,1,1,1]
+manual_cal=[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0.8,0.8,1,1.4,1,0.8,1,0.9,1,0.9,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
+for i in range(1,41):
+     ctron_time_data_3d[:,i]=ctron_time_data_3d[:,i]*manual_cal[i-1]
+     
+start_time=4.2e-6#3000e-9
+plot_length=1e-6
+end_time=start_time+plot_length#6000e-9
+start_sample=int(start_time/(1/60e6))
+end_sample=int(end_time/(1/60e6))
+num_samples=end_sample-start_sample
+
+np_mcpm_data=np.asarray(ctron_time_data_3d[:,1:41])
+averaged_data = []
+avg_num=5
+for i in range(0, 600):
+    averaged_data.append(moving_average(np_mcpm_data[i,:], avg_num))
+
+averaged_data = np.asarray(averaged_data)
+print(averaged_data.shape)
+#x = channeltron_positions
+x = (np.linspace(((avg_num-1)/2),(40-(avg_num-1)/2),40-(avg_num-1))*6)-120
+
+#y = np.linspace(0,1e-5,num=len(ctron_time_data_3d[:,1]))
+y = np.linspace(start_time,end_time,num=num_samples)
+y=(y*1e9)-(start_time*1e9)
+X, Y = np.meshgrid(x, y)
+print(X.shape)
+print(Y.shape)
+
+z = averaged_data[start_sample:end_sample,:]
+Z = z.reshape(X.shape)
+
+fig = plt.figure()
+ax = fig.add_subplot(111, projection ='3d')
+ax.plot_surface(X, Y, Z, rstride=1, cstride=1, cmap=cm.jet, linewidth=0, antialiased=False)
+#ax.view_init(elev=90, azim=0)
+#ax.view_init(elev=0, azim=0)
+#ax.set_ylim([0, 10])
+plt.ylim(0,plot_length*1e9)
+ax.xaxis.labelpad = 10
+ax.yaxis.labelpad = 10
+ax.zaxis.labelpad = 10
+ax.set_ylabel('Time (ns)', fontsize=14)
+#ax.set_xlabel('Horizontal Position (mm)', fontsize=14)
+ax.set_zlabel('Measured Signal Strength (Arb.)', fontsize=14)
+ax.set_xticks([])
+plt.show()
+
